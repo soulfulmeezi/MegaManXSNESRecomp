@@ -673,18 +673,21 @@ static bool cpu_companion_gap_reachable(const uint8_t *ram,int x,int feet,int di
 static bool cpu_companion_raised_wall(const uint8_t *ram,int x,int feet,
                                       int direction,int *distance_out) {
   if (!ram || !direction) return false;
-  for (int distance=40;distance<=176;distance+=4) {
+  for (int distance=24;distance<=192;distance+=4) {
     int wx=x+direction*distance;
     if (!MmxWeaponsTerrainSolid(ram,wx,feet-16,false,NULL) ||
         !MmxWeaponsTerrainSolid(ram,wx,feet-40,false,NULL) ||
         MmxWeaponsTerrainSolid(ram,wx-direction*12,feet-24,false,NULL))
       continue;
-    for (int rise=32;rise<=144;rise+=4) {
+    /* Tall Highway support columns are roughly 170+ game pixels high.
+     * A 144px ceiling on wall detection used to make Zero freeze at their
+     * bases even though native repeated wall kicks can reach their tops. */
+    for (int rise=32;rise<=256;rise+=4) {
       int surface=0;
       int sample=feet-rise;
       if (!cpu_companion_walkable(MmxWeaponsTerrainClass(ram,wx,sample)) ||
           !MmxWeaponsTerrainSolid(ram,wx,sample,true,&surface) ||
-          surface>feet-32 || surface<feet-144 ||
+          surface>feet-32 || surface<feet-256 ||
           MmxWeaponsTerrainSolid(ram,wx,surface-20,true,NULL))
         continue;
       int landing_x=wx+direction*20;
@@ -829,12 +832,17 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
    * Do this before obstruction/stall reactions to avoid walking into void. */
   bool short_landing=edge && cpu_companion_gap_reachable(ram,x,feet,direction);
   int wall_distance=0;
-  bool raised_wall=edge && !short_landing &&
+  /* Look for a tall climbable wall while STILL on safe ground, not only
+   * after the cliff sensor fires. Once within ~48px, proactively jump at
+   * the wall. At a lip, allow a longer native dash-jump approach if the
+   * wall's top has a valid, walkable landing. */
+  bool raised_wall=direction && !short_landing &&
       cpu_companion_raised_wall(ram,x,feet,direction,&wall_distance);
+  bool climb_takeoff=raised_wall && (edge || wall_distance<=48);
   /* Opt-in field diagnostics make real stage geometry inspectable without
    * assuming a screenshot reveals the actual SNES collision classes.
    * This never affects controller input or deterministic guest state. */
-  if (edge && getenv("MMX_CPU_TRACE")) {
+  if ((edge || climb_takeoff) && getenv("MMX_CPU_TRACE")) {
     static int last_log=-1000;
     if (snes_frame_counter-last_log>=90) {
       fprintf(stderr,"[cpu-nav] edge x=%d feet=%d dir=%d p1dx=%d short=%d raised=%d wall_dist=%d grounded=%d cooldown=%u\n",
@@ -848,7 +856,7 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
    * climbable wall, but never launch toward completely unseen/unsafe terrain. */
   if (edge && !short_landing && !raised_wall)
     return input&(uint16_t)~(MMX_CPU_LEFT|MMX_CPU_RIGHT|MMX_CPU_JUMP|MMX_CPU_DASH);
-  if (!edge && !obstacle && !blocked) return input;
+  if (!edge && !obstacle && !blocked && !climb_takeoff) return input;
 
   bool headroom=true;
   for (int offset=-6;offset<=6;offset+=6) {
@@ -867,7 +875,7 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
   /* An elevated wall >~72px away can need more horizontal range than a
    * normal hop. Ask Zero to dash-jump as part of his own route choice;
    * the game's native equipment/movement code still controls the result. */
-  cpu_cliff_dash_frames=(raised_wall && wall_distance>72 &&
+  cpu_cliff_dash_frames=(climb_takeoff && wall_distance>72 &&
                          follower->character==MMX_COOP_ZERO) ? 20 : 0;
   uint16_t takeoff=(input&(uint16_t)~MMX_CPU_FIRE)|MMX_CPU_JUMP;
   if (cpu_cliff_dash_frames) {
