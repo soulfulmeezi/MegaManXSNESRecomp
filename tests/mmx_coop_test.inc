@@ -1076,27 +1076,37 @@ static void coop_cpu_companion_checks(const char *fixture) {
   s=MmxCoopGetState();
   check((s.players[1].input&(SNES_PAD_RIGHT|SNES_PAD_B))==(SNES_PAD_RIGHT|SNES_PAD_B),
       "grounded CPU companion follows and jumps toward elevated leader");
-  /* A nearby valid enemy should trigger a Y fire pulse on the same frame
-   * as movement and jumping, without requiring a second controller. */
+  /* Simulate leaving the ground after takeoff. Holding the physical B
+   * button for the full ascent (rather than only the first grounded frame)
+   * is required to clear a pit in the native X1/X3 jump controller. */
+  s.players[1].body[0x2b]&=(uint8_t)~4;
+  MmxCoopSetState(&s);
   const unsigned enemy=0xe68, target_x=follow_x+72;
   g_ram[enemy]=1;g_ram[enemy+14]=1;g_ram[enemy+0x27]=15;
   g_ram[enemy+5]=(uint8_t)target_x;g_ram[enemy+6]=(uint8_t)(target_x>>8);
   g_ram[enemy+8]=(uint8_t)follow_y;g_ram[enemy+9]=(uint8_t)(follow_y>>8);
-  g_ram[0xb9c]=0;
+  for (unsigned tick=0;tick<12;++tick) {
+    g_ram[0xb9c]=(uint8_t)tick;
+    MmxCoopPoll(0,0);s=MmxCoopGetState();
+    check((s.players[1].input&(SNES_PAD_RIGHT|SNES_PAD_B))==
+        (SNES_PAD_RIGHT|SNES_PAD_B) && !(s.players[1].input&SNES_PAD_Y),
+        "CPU companion holds jump during ascent without shooting");
+  }
+  /* With B released and the follower still airborne, native auto-fire
+   * resumes. Restoring ground contact during cooldown must not cause
+   * immediate re-jumps while the leader remains elevated. */
+  g_ram[0xb9c]=24;
   MmxCoopPoll(0,0);s=MmxCoopGetState();
-  check((s.players[1].input&(SNES_PAD_RIGHT|SNES_PAD_B|SNES_PAD_Y))==
-      (SNES_PAD_RIGHT|SNES_PAD_B|SNES_PAD_Y),
-      "CPU companion combines follow, jumping, and attacking");
-  g_ram[0xb9c]=1;
-  MmxCoopPoll(0,0);s=MmxCoopGetState();
-  check(!(s.players[1].input&SNES_PAD_Y),
-      "CPU companion releases fire between timed attacks");
-  g_ram[enemy]=0;
-  s.players[1].body[0x2b]&=(uint8_t)~4;
+  check((s.players[1].input&(SNES_PAD_RIGHT|SNES_PAD_Y))==
+      (SNES_PAD_RIGHT|SNES_PAD_Y) && !(s.players[1].input&SNES_PAD_B),
+      "CPU companion releases jump and resumes timed enemy fire");
+  s.players[1].body[0x2b]|=4;
   MmxCoopSetState(&s);
+  g_ram[0xb9c]=25;
   MmxCoopPoll(0,0);s=MmxCoopGetState();
-  check((s.players[1].input&SNES_PAD_RIGHT) && !(s.players[1].input&SNES_PAD_B),
-      "airborne CPU companion releases jump for the next landing");
+  check(!(s.players[1].input&SNES_PAD_B),
+      "jump cooldown prevents immediate repeated takeoff");
+  g_ram[enemy]=0;
   MmxCoopSetCpuCompanion(false);
   MmxCoopPoll(0,SNES_PAD_LEFT);s=MmxCoopGetState();
   check(s.players[1].input==SNES_PAD_LEFT,
