@@ -64,6 +64,26 @@ static inline void MmxCoopImportLegacy(MmxCoopState *out, const uint8_t *bytes) 
       MMX_COOP_LEGACY_STATE_SIZE - old_player * 2);
 }
 
+/* Pure controller decision for one local companion terrain scan.
+ * Sensor inputs belong to the CPU's OWN position, never the human jump pad.
+ * WAIT forbids walking into unverified void; CLIMB requests takeoff against
+ * a confirmed wall and then native wall-slide/wall-kick input takes over.
+ * Inline makes the decision independently testable without owning a ROM. */
+typedef enum {
+  MMX_CPU_MOVE_WALK, MMX_CPU_MOVE_WAIT,
+  MMX_CPU_MOVE_JUMP, MMX_CPU_MOVE_CLIMB
+} MmxCpuMoveDecision;
+static inline MmxCpuMoveDecision MmxCoopCpuChooseMove(
+    bool ground_missing, bool safe_landing, bool climb_route,
+    bool wall_near, bool obstacle_or_stall) {
+  if (ground_missing)
+    return climb_route ? MMX_CPU_MOVE_CLIMB :
+           safe_landing ? MMX_CPU_MOVE_JUMP : MMX_CPU_MOVE_WAIT;
+  if (climb_route && wall_near) return MMX_CPU_MOVE_CLIMB;
+  if (obstacle_or_stall) return MMX_CPU_MOVE_JUMP;
+  return MMX_CPU_MOVE_WALK;
+}
+
 /* The trusted co-op plugin prepares the owner-supplied X3 ROM, then enables
  * the chosen roster. This mode excludes single-player character exchange. */
 bool MmxCoopEnable(unsigned p1_character);
