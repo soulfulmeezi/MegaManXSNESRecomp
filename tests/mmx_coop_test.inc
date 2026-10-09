@@ -1107,6 +1107,27 @@ static void coop_cpu_companion_checks(const char *fixture) {
   check(!(s.players[1].input&SNES_PAD_B),
       "jump cooldown prevents immediate repeated takeoff");
   g_ram[enemy]=0;
+
+  /* Wall recovery does not require any jump input from the player.
+   * Simulate the native airborne action $10 (wall slide) in the controlled
+   * follower's context and verify a fresh B kick, release, and away-steer. */
+  MmxCoopSetCpuCompanion(false);
+  MmxCoopSetCpuCompanion(true); /* fresh timers from an independent approach */
+  s.players[1].body[0x2b]&=(uint8_t)~4;
+  s.players[1].body[2]=0x10; /* native wall slide */
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check((s.players[1].input&(SNES_PAD_RIGHT|SNES_PAD_B))==
+      (SNES_PAD_RIGHT|SNES_PAD_B),
+      "CPU companion kicks off a wall without the leader jumping");
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check((s.players[1].input&SNES_PAD_LEFT) && !(s.players[1].input&SNES_PAD_B),
+      "CPU companion releases jump and steers away from wall");
+  for (unsigned tick=0;tick<8;++tick) MmxCoopPoll(0,0);
+  s=MmxCoopGetState();
+  check(!(s.players[1].input&SNES_PAD_B),
+      "CPU wall-jump cooldown prevents per-frame retriggering");
+
   MmxCoopSetCpuCompanion(false);
   MmxCoopPoll(0,SNES_PAD_LEFT);s=MmxCoopGetState();
   check(s.players[1].input==SNES_PAD_LEFT,
