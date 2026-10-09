@@ -843,7 +843,10 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
    * a high platform. Search BOTH sides for an actual close wall before
    * choosing a route: this is not a reaction to P1's B/jump input.
    * Run ahead of the early !direction exit below. */
-  bool elevated_goal=(int)word(leader->body+8)<y-48;
+  /* The human must already be standing on the higher tier. A midair X
+   * jumping in place is not a climb destination and must not steer Zero. */
+  bool elevated_goal=(leader->body[0x2b]&4)!=0 &&
+                      (int)word(leader->body+8)<y-48;
   bool climb_from_below=false;
   int climb_face=0;
   if (!direction && elevated_goal) {
