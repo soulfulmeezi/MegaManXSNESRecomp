@@ -1120,13 +1120,24 @@ static void coop_cpu_companion_checks(const char *fixture) {
   check((s.players[1].input&(SNES_PAD_RIGHT|SNES_PAD_B))==
       (SNES_PAD_RIGHT|SNES_PAD_B),
       "CPU companion kicks off a wall without the leader jumping");
+  /* Wall-side detection prefers the live terrain, falling back to travel
+   * toward the leader if the fixture has no close wall at the character. */
+  int wall_dir=
+      MmxWeaponsTerrainSolid(g_ram,(int)follow_x+11,(int)follow_y-4,false,NULL) ? 1 :
+      MmxWeaponsTerrainSolid(g_ram,(int)follow_x-11,(int)follow_y-4,false,NULL) ? -1 : 1;
+  uint16_t away=wall_dir>0 ? SNES_PAD_LEFT : SNES_PAD_RIGHT;
+  uint16_t toward_wall=wall_dir>0 ? SNES_PAD_RIGHT : SNES_PAD_LEFT;
   MmxCoopPoll(0,0);s=MmxCoopGetState();
-  check((s.players[1].input&SNES_PAD_LEFT) && !(s.players[1].input&SNES_PAD_B),
-      "CPU companion releases jump and steers away from wall");
+  check((s.players[1].input&away) && !(s.players[1].input&SNES_PAD_B),
+      "CPU releases jump and steers away from the contacted wall");
+  for (unsigned tick=0;tick<3;++tick) MmxCoopPoll(0,0);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check((s.players[1].input&toward_wall) && !(s.players[1].input&SNES_PAD_B),
+      "CPU steers back toward the wall after a brief kick-off");
   for (unsigned tick=0;tick<8;++tick) MmxCoopPoll(0,0);
   s=MmxCoopGetState();
   check(!(s.players[1].input&SNES_PAD_B),
-      "CPU wall-jump cooldown prevents per-frame retriggering");
+      "wall-jump recovery does not repeatedly mash jump each frame");
 
   /* The human can run toward a companion who is already AHEAD: do not
    * force the CPU to turn away from an approaching obstacle. A stationary
