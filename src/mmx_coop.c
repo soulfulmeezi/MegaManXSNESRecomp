@@ -325,6 +325,16 @@ bool MmxCoopTransitionActive(void) {
 }
 
 bool MmxCoopEnabled(void) { return enabled; }
+/* No native shared-screen catch-up beam while the locally controlled
+ * companion is attempting parkour. Online/human co-op retains stock scene
+ * handoffs. Scripted boss/capsule/door handoffs remain separate. */
+static bool cpu_traversal_active(void) {
+  if (!enabled || !cpu_companion) return false;
+#if SNESRECOMP_NET
+  if (snes_netplay_active()) return false;
+#endif
+  return true;
+}
 static void shot_ghost_reset(void);
 static void lift_reset(void);
 static void cpu_companion_reset_motion(void) {
@@ -580,7 +590,9 @@ bool MmxCoopFrameTick(uint8_t *r) {
   if(refill_paused(r)) return false;
   if (scene_tick(r)) return true;
   if (!state.scene_owner && join_tick(r)) return true;
-  cpu_companion_rescue(r);
+  /* In CPU mode, the last-chance pit safety runs only near native death;
+   * it must never mask ordinary wall-slide navigation. */
+  if (cpu_traversal_active()) cpu_companion_rescue(r);
   if (r[0x1f10]>=6) return false;
   unsigned phases[2]={0,0};
   for (unsigned seat=0;seat<2;++seat) if (state.players[seat].status==MMX_COOP_ALIVE &&
@@ -883,7 +895,7 @@ bool MmxCoopFindLanding(const uint8_t *r,uint16_t *out_x,uint16_t *out_y) {
  * Activated before native bottom-screen fatal contact, with throttling.
  * If no safe landing exists, don't fabricate a coordinate or suppress death. */
 static void cpu_companion_rescue(uint8_t *r) {
-  if (!cpu_companion || !state.initialized || !r ||
+  if (!cpu_traversal_active() || !state.initialized || !r ||
       state.menu_owner || state.scene_owner || state.stage_pending ||
       r[0xd1]!=2 || r[0xd2]!=4 || r[0xd3]!=4 ||
       r[0x1f0c] || r[0x1f23] || r[0x1f48]) return;
@@ -894,7 +906,10 @@ static void cpu_companion_rescue(uint8_t *r) {
       !(f->body[0x27]&127) || !(h->body[0x27]&127) ||
       f->body[2]==12 || h->body[2]==12) return;
   const int bottom=(int)word(r+0x1e5c)+224;
-  if ((int)word(f->body+8)<bottom-64 || floor_below(r,f->body)) return;
+  /* Native shared-screen pit death begins around bottom+32. Rescue in the
+   * final few pixels only; the old bottom-64 threshold teleported Zero
+   * nearly 100 pixels too early, before he could complete wall-jumps. */
+  if ((int)word(f->body+8)<bottom+24 || floor_below(r,f->body)) return;
   unsigned previous=state.current;
   if (!MmxCoopSelect(r,cpu_human_seat)) return;
   uint16_t x=0,y=0;
@@ -1022,7 +1037,8 @@ static bool scene_tick(uint8_t *r) {
    * he keeps falling into the native death zone. The partner is also
    * beamed as soon as an unentered Dr. Light capsule ($4D) exists while he
    * is away: its camera lock is about to leave him behind. */
-  if(!state.scene_owner && !MmxCoopViewsOnline() && state.players[0].status==MMX_COOP_ALIVE &&
+  if(!state.scene_owner && !cpu_traversal_active() && !MmxCoopViewsOnline() &&
+      state.players[0].status==MMX_COOP_ALIVE &&
       state.players[1].status==MMX_COOP_ALIVE && (state.players[0].body[0x27]&127) &&
       (state.players[1].body[0x27]&127)) {
     /* MmxCoopFrameTick has just captured the current body: both stored
