@@ -1356,6 +1356,27 @@ void MmxCoopPoll(uint16_t p1, uint16_t p2) {
 #endif
       ;
   if (offline_cpu) {
+    /* Physical P1 must NEVER remain bound to the fallen seat while the
+     * other is alive. The L2 swap used to require both alive and ignored
+     * the lost seat until the next level, leaving X uncontrollable if the
+     * human had swapped to Zero before Zero died. Follow the live player
+     * on this very input poll, before AI input routing or pressed edges. */
+    unsigned survivor=cpu_human_seat^1;
+    const MmxCoopPlayer *controlled=&state.players[cpu_human_seat];
+    const MmxCoopPlayer *remaining=&state.players[survivor];
+    if (state.initialized &&
+        (controlled->status!=MMX_COOP_ALIVE ||
+         !(controlled->body[0x27]&127)) &&
+        remaining->status==MMX_COOP_ALIVE &&
+        (remaining->body[0x27]&127)) {
+      cpu_human_seat=(uint8_t)survivor;
+      cpu_companion_reset_motion();
+      if (getenv("MMX_CPU_TRACE"))
+        fprintf(stderr,
+            "[cpu-switch] controlled seat fallen; DualSense handed to surviving %s (seat %u)\n",
+            state.players[survivor].character==MMX_COOP_ZERO?"Zero":"X",
+            survivor);
+    }
     bool held=cpu_l2_trigger_held;
     if (held && !cpu_swap_trigger_down && state.initialized &&
         !state.menu_owner && !state.scene_owner && !state.stage_pending &&
