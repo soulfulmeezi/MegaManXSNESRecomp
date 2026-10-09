@@ -1176,36 +1176,39 @@ static void coop_cpu_companion_checks(const char *fixture) {
   s.players[1].body[2]=0x10; /* Native wall slide. */
   s.players[1].input=0;
   MmxCoopSetState(&s);
-  int wx=(int)coop_x(&s.players[1]), wy=(int)coop_y(&s.players[1]);
-  int wall_dir=
-      MmxWeaponsTerrainSolid(g_ram,wx+11,wy-4,false,NULL) ? 1 :
-      MmxWeaponsTerrainSolid(g_ram,wx-11,wy-4,false,NULL) ? -1 :
-      (coop_x(&s.players[0])>coop_x(&s.players[1]) ? 1 : -1);
-  uint16_t toward_wall=wall_dir>0 ? SNES_PAD_RIGHT : SNES_PAD_LEFT;
-  uint16_t away=wall_dir>0 ? SNES_PAD_LEFT : SNES_PAD_RIGHT;
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  uint16_t toward_wall=(s.players[1].input&SNES_PAD_RIGHT) ?
+      SNES_PAD_RIGHT : SNES_PAD_LEFT;
+  uint16_t away=toward_wall==SNES_PAD_RIGHT ? SNES_PAD_LEFT : SNES_PAD_RIGHT;
+  check((s.players[1].input&(SNES_PAD_B|toward_wall))==
+        (SNES_PAD_B|toward_wall),
+      "wall recovery: first actionable slide frame kicks immediately");
 
-  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  /* The native kick launches the body out of slide into airborne action 6:
+   * this transition is required to rearm jump #2. A stuck slide without
+   * an actual departure must NOT spend both jumps automatically. */
+  s.players[1].body[2]=6;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(toward_wall,0);s=MmxCoopGetState();
+  check((s.players[1].input&away) && !(s.players[1].input&SNES_PAD_B),
+      "wall recovery: push away and release B after first kick");
+  MmxCoopPoll(toward_wall,0);s=MmxCoopGetState();
+  check((s.players[1].input&away) && !(s.players[1].input&SNES_PAD_B),
+      "wall recovery: continue kick-away for initial ascent");
+
+  /* Simulate an EARLY wall reattachment, two ticks into the four-tick
+   * push. Recovery MUST jump on this very poll rather than waiting for
+   * the fixed four-away/nine-return timer to expire. */
+  s.players[1].body[2]=0x10;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(away,0);s=MmxCoopGetState();
   check((s.players[1].input&(SNES_PAD_B|toward_wall))==
         (SNES_PAD_B|toward_wall),
-      "wall recovery: first native wall-jump begins independently");
-  for (unsigned tick=0;tick<4;++tick) {
-    MmxCoopPoll(toward_wall,0);s=MmxCoopGetState();
-    check((s.players[1].input&away) && !(s.players[1].input&SNES_PAD_B),
-        "wall recovery: kick-away input overrides the human follow direction");
-  }
-  for (unsigned tick=0;tick<9;++tick) {
-    MmxCoopPoll(away,0);s=MmxCoopGetState();
-    check((s.players[1].input&toward_wall) && !(s.players[1].input&SNES_PAD_B),
-        "wall recovery: returns toward wall before the second jump");
-  }
-  MmxCoopPoll(0,0);s=MmxCoopGetState();
-  check((s.players[1].input&(SNES_PAD_B|toward_wall))==
-        (SNES_PAD_B|toward_wall),
-      "wall recovery: second jump only on renewed wall slide");
+      "wall recovery: second eligible slide interrupts return timer immediately");
   for (unsigned tick=0;tick<4+9+20;++tick) {
     MmxCoopPoll(away,0);s=MmxCoopGetState();
     check(!(s.players[1].input&SNES_PAD_B),
-        "wall recovery: never jumps a third time before landing");
+        "wall recovery: no third wall-jump after two kicks");
   }
 
   /* Ground after TWO jumps must release high-priority wall state in the
