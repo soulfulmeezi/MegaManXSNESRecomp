@@ -1294,22 +1294,27 @@ static void coop_cpu_companion_checks(const char *fixture) {
       "tall climb: first native wall kick fires as soon as slide is available");
   for (unsigned n=2;n<=8;++n) {
     s.players[1].body[2]=6;
+    /* A real native wall kick must physically ASCEND before its apex.
+     * Simulate the upward change in Y; B stays held for native height. */
+    unsigned rising_y=coop_y(&s.players[1])-12;
+    s.players[1].body[8]=(uint8_t)rising_y;
+    s.players[1].body[9]=(uint8_t)(rising_y>>8);
     MmxCoopSetState(&s);
     MmxCoopPoll(0,0);s=MmxCoopGetState();
-    /* Returning toward the climb wall IMMEDIATELY after each kick is
-     * essential: steering away used to let the CPU land at its starting
-     * x/y without reattaching for a second wall-kick. */
-    check((s.players[1].input&wall_dir_input)!=0,
-        "tall climb: steer toward the wall during native kick ascent");
+    check((s.players[1].input&(wall_dir_input|SNES_PAD_B))==
+          (wall_dir_input|SNES_PAD_B),
+        "tall climb: hold B while ascending and steer into wall");
+    /* Native Y levels out at the apex. Pre-release B BEFORE the next
+     * slide rather than waste its first actionable frame on release. */
+    MmxCoopPoll(0,0);s=MmxCoopGetState();
+    check(!(s.players[1].input&SNES_PAD_B),
+        "tall climb: release B at measured apex without a slide delay");
     s.players[1].body[2]=0x10;
     MmxCoopSetState(&s);
     MmxCoopPoll(0,0);s=MmxCoopGetState();
-    check(!(s.players[1].input&SNES_PAD_B),
-        "tall climb: immediate slide reattachment releases old B hold");
-    MmxCoopPoll(0,0);s=MmxCoopGetState();
     check((s.players[1].input&(SNES_PAD_B|wall_dir_input))==
           (SNES_PAD_B|wall_dir_input),
-        "tall climb: each renewed wall slide can trigger another native kick");
+        "tall climb: kick immediately on first reattachment slide frame");
   }
   s.players[1].body[2]=6;
   MmxCoopSetState(&s);
