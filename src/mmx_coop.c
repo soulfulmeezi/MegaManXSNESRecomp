@@ -62,6 +62,8 @@ static uint16_t cpu_wall_last_y;
 static uint8_t cpu_human_seat, cpu_swap_trigger_down, cpu_rescue_cooldown;
 static bool cpu_l2_trigger_held;
 static uint8_t cpu_stall_ticks;
+static uint8_t cpu_zero_melee_cooldown;
+static bool cpu_zero_dash_was_active;
 static uint16_t cpu_last_x;
 static int8_t cpu_jump_direction, cpu_wall_direction, cpu_stall_direction;
 static unsigned starting_character;
@@ -657,8 +659,6 @@ enum {
  * with a direct saber and has his own shorter melee attack cadence.
  * Keep this CPU-only selection outside the traversal paths: wall/jump
  * returns otherwise bypass attack decisions on nearly every busy tick. */
-static uint8_t cpu_zero_melee_cooldown;
-static bool cpu_zero_dash_was_active;
 enum {
   MMX_CPU_WALL_IDLE, MMX_CPU_WALL_SEEK, MMX_CPU_WALL_PUSH,
   MMX_CPU_WALL_RETURN, MMX_CPU_WALL_FINISHED
