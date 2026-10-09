@@ -920,7 +920,8 @@ static uint16_t cpu_companion_wall_recovery(const MmxCoopPlayer *f,
   /* If Zero is sliding and B is still held from the kick ascent, release
    * it NOW; next frame is the earliest possible new B press edge. The
    * original 4+9-frame steering timers never delay a reattached slide. */
-  if (wall_slide && (f->input&MMX_CPU_JUMP)) {
+  if (wall_slide && cpu_wall_recovery_left_slide &&
+      (f->input&MMX_CPU_JUMP)) {
     cpu_wall_jump_hold_frames=0;
     return toward;
   }
