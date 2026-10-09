@@ -32,6 +32,7 @@ extern int snes_frame_counter;
 
 static MmxCoopState state = {.players = {{.character = MMX_COOP_X}, {.character = MMX_COOP_ZERO}}};
 static bool enabled;
+static bool cpu_companion; /* Opt-in local mode; never stored in guest save state. */
 static unsigned starting_character;
 _Static_assert(sizeof(MmxCoopPlayer) == 2276, "Co-op player save ABI");
 _Static_assert(sizeof(MmxCoopState) == 4664, "Co-op save ABI");
@@ -335,7 +336,8 @@ bool MmxCoopEnable(unsigned character) {
   if (character > MMX_COOP_ZERO || !MmxZeroEnabled()) return false;
   starting_character = character; enabled = true; MmxCoopReset(); return true;
 }
-void MmxCoopDisable(void) { enabled = false; starting_character = 0; MmxCoopReset(); }
+void MmxCoopDisable(void) { enabled = false; cpu_companion = false; starting_character = 0; MmxCoopReset(); }
+void MmxCoopSetCpuCompanion(bool active) { cpu_companion = active; }
 MmxCoopState MmxCoopGetState(void) { return state; }
 bool MmxCoopValidState(const MmxCoopState *s) {
   if (!s || s->initialized > 1 || s->current > 1 || s->controller_pass > 2 ||
@@ -574,9 +576,31 @@ bool MmxCoopFrameTick(uint8_t *r) {
   if (frozen) r[0xb9d]=r[0xba0]=0;
   return frozen;
 }
+/* First local companion milestone: keep seat 2 near seat 1 by feeding the
+ * native co-op controller, not by teleporting or moving sprites directly.
+ * Later milestones will add terrain-aware jumps, attacks and character swap.
+ * This deliberately reads only serialized gameplay state (deterministic). */
+static uint16_t cpu_companion_input(void) {
+  const MmxCoopPlayer *leader = &state.players[0], *follower = &state.players[1];
+  if (!state.initialized || state.menu_owner || state.scene_owner || state.stage_pending ||
+      leader->status != MMX_COOP_ALIVE || follower->status != MMX_COOP_ALIVE ||
+      !(leader->body[0x27] & 127) || !(follower->body[0x27] & 127))
+    return 0;
+  int dx = (int)word(leader->body + 5) - (int)word(follower->body + 5);
+  if (dx > 40) return SNES_PAD_RIGHT;
+  if (dx < -40) return SNES_PAD_LEFT;
+  return 0;
+}
 void MmxCoopPoll(uint16_t p1, uint16_t p2) {
   if (!enabled) return;
   uint16_t inputs[2] = {p1 & 4095, p2 & 4095};
+  /* Netplay keeps remote seat input authoritative, even when the local
+   * launcher has the CPU companion option selected. */
+  if (cpu_companion
+#if SNESRECOMP_NET
+      && !snes_netplay_active()
+#endif
+  ) inputs[1] = cpu_companion_input();
   for (unsigned i = 0; i < 2; ++i) {
     state.players[i].pressed = inputs[i] & ~state.players[i].input;
     state.players[i].input = inputs[i];
