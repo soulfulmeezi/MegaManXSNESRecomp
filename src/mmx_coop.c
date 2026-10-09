@@ -48,6 +48,10 @@ static bool cpu_wall_recovery_left_slide;
  * so an ignored early B press never consumes one of the two climb attempts. */
 static bool cpu_wall_buffer_pending, cpu_wall_buffer_attempted;
 static uint8_t cpu_wall_jump_hold_frames;
+/* Tall ascents can require many successive native wall-kicks. Ordinary
+ * accidental slides keep the original two-kick safety limit. */
+static bool cpu_tall_wall_climb;
+static uint16_t cpu_tall_wall_start_y, cpu_tall_wall_best_y;
 static bool cpu_wall_y_valid;
 static uint16_t cpu_wall_last_y;
 static uint8_t cpu_human_seat, cpu_swap_trigger_down, cpu_rescue_cooldown;
@@ -359,6 +363,7 @@ static void cpu_companion_reset_motion(void) {
   cpu_wall_recovery_phase=cpu_wall_recovery_jumps=cpu_wall_recovery_ticks=0;
   cpu_wall_recovery_left_slide=cpu_wall_buffer_pending=cpu_wall_buffer_attempted=false;
   cpu_wall_jump_hold_frames=0;cpu_wall_y_valid=false;cpu_wall_last_y=0;
+  cpu_tall_wall_climb=false;cpu_tall_wall_start_y=cpu_tall_wall_best_y=0;
   cpu_jump_direction=cpu_wall_direction=0;
   cpu_stall_ticks=0;cpu_last_x=0;cpu_stall_direction=0;
 }
@@ -881,15 +886,16 @@ static bool cpu_companion_wall_jump_near(const uint8_t *ram,int x,int y,int dir)
           MmxWeaponsTerrainSolid(ram,x+dir*15,y-16,false,NULL));
 }
 /* Native and buffered wall-kick input is highest priority.
- * Sense physical contact BEFORE native slide so B can be released; fire B
- * on the FIRST actionable slide frame. Fixed kick-off/return windows steer
- * the trajectory but NEVER delay a fresh slide after leaving the last one.
- * Two kicks maximum, and landing ends the entire cycle immediately. */
+ * Ordinary recovery is limited to two kicks. A genuine upper-platform goal
+ * invokes a taller eight-kick climb instead, using *real* renewed native
+ * wall-slide states rather than timed synthetic teleports. The away-then-
+ * toward steering is shorter for tall climbs so Zero can reattach higher. */
 static uint16_t cpu_companion_wall_recovery(const MmxCoopPlayer *f,
                                             bool wall_slide,bool near_wall,
                                             bool descending) {
   uint16_t toward=cpu_wall_direction>0 ? MMX_CPU_RIGHT : MMX_CPU_LEFT;
   uint16_t away=cpu_wall_direction>0 ? MMX_CPU_LEFT : MMX_CPU_RIGHT;
+  unsigned max_kicks=cpu_tall_wall_climb ? 8u : 2u;
   if (!wall_slide && cpu_wall_recovery_jumps)
     cpu_wall_recovery_left_slide=true;
 
@@ -902,11 +908,11 @@ static uint16_t cpu_companion_wall_recovery(const MmxCoopPlayer *f,
       ++cpu_wall_recovery_jumps;
       cpu_wall_recovery_left_slide=false;
       cpu_wall_recovery_phase=MMX_CPU_WALL_PUSH;
-      cpu_wall_recovery_ticks=4;
+      cpu_wall_recovery_ticks=cpu_tall_wall_climb ? 1 : 4;
       cpu_wall_jump_hold_frames=17;
       if (getenv("MMX_CPU_TRACE"))
-        fprintf(stderr,"[cpu-wall] buffered kick confirmed %u/2 action=18 frame=%d\n",
-                (unsigned)cpu_wall_recovery_jumps,snes_frame_counter);
+        fprintf(stderr,"[cpu-wall] buffered kick confirmed %u/%u action=18 frame=%d\n",
+                (unsigned)cpu_wall_recovery_jumps,max_kicks,snes_frame_counter);
       return away|MMX_CPU_JUMP;
     }
     /* Native code did not accept the buffer. Release B to re-arm the
@@ -925,17 +931,21 @@ static uint16_t cpu_companion_wall_recovery(const MmxCoopPlayer *f,
     cpu_wall_jump_hold_frames=0;
     return toward;
   }
-  if (wall_slide && cpu_wall_recovery_jumps<2 &&
+  if (wall_slide && cpu_wall_recovery_jumps<max_kicks &&
       (cpu_wall_recovery_jumps==0 || cpu_wall_recovery_left_slide)) {
     ++cpu_wall_recovery_jumps;
     cpu_wall_recovery_left_slide=false;
     cpu_wall_recovery_phase=MMX_CPU_WALL_PUSH;
-    cpu_wall_recovery_ticks=4;
+    /* A long climb needs to get back to its wall quickly. One kick-off
+     * frame creates a clean release, then hold INTO the same wall while
+     * still rising; otherwise Zero drifts away and lands back at the base. */
+    cpu_wall_recovery_ticks=cpu_tall_wall_climb ? 1 : 4;
     cpu_wall_jump_hold_frames=18;
     if (getenv("MMX_CPU_TRACE"))
-      fprintf(stderr,"[cpu-wall] jump=%u/2 first-eligible-slide frame=%d dir=%d\n",
-              (unsigned)cpu_wall_recovery_jumps,
-              snes_frame_counter,(int)cpu_wall_direction);
+      fprintf(stderr,"[cpu-wall] jump=%u/%u frame=%d dir=%d tall=%d best_y=%u start_y=%u\n",
+              (unsigned)cpu_wall_recovery_jumps,max_kicks,
+              snes_frame_counter,(int)cpu_wall_direction,(int)cpu_tall_wall_climb,
+              (unsigned)cpu_tall_wall_best_y,(unsigned)cpu_tall_wall_start_y);
     return toward|MMX_CPU_JUMP;
   }
 
@@ -955,7 +965,7 @@ static uint16_t cpu_companion_wall_recovery(const MmxCoopPlayer *f,
     return toward|MMX_CPU_JUMP;
   }
 
-  if (cpu_wall_recovery_jumps>=2 && !cpu_wall_jump_hold_frames) {
+  if (cpu_wall_recovery_jumps>=max_kicks && !cpu_wall_jump_hold_frames) {
     cpu_wall_recovery_phase=MMX_CPU_WALL_FINISHED;
     return toward;
   }
@@ -969,7 +979,7 @@ static uint16_t cpu_companion_wall_recovery(const MmxCoopPlayer *f,
     if (cpu_wall_recovery_ticks) --cpu_wall_recovery_ticks;
     if (!cpu_wall_recovery_ticks) {
       cpu_wall_recovery_phase=MMX_CPU_WALL_RETURN;
-      cpu_wall_recovery_ticks=9;
+      cpu_wall_recovery_ticks=cpu_tall_wall_climb ? 1 : 9;
     }
   } else if (cpu_wall_recovery_phase==MMX_CPU_WALL_RETURN) {
     if (cpu_wall_recovery_ticks) --cpu_wall_recovery_ticks;
@@ -1055,11 +1065,15 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
    * is checked BEFORE any recovery B press or phase change. */
   if (grounded && cpu_wall_recovery_phase!=MMX_CPU_WALL_IDLE) {
     if (getenv("MMX_CPU_TRACE"))
-      fprintf(stderr,"[cpu-wall] landed after %u/2 jump(s)\n",
-              (unsigned)cpu_wall_recovery_jumps);
+      fprintf(stderr,"[cpu-wall] landed after %u/%u kick(s) start_y=%u best_y=%u landed_y=%d gain=%d\n",
+              (unsigned)cpu_wall_recovery_jumps,
+              cpu_tall_wall_climb ? 8u : 2u,
+              (unsigned)cpu_tall_wall_start_y,(unsigned)cpu_tall_wall_best_y,
+              y,(int)cpu_tall_wall_start_y-(int)cpu_tall_wall_best_y);
     cpu_wall_recovery_phase=cpu_wall_recovery_jumps=cpu_wall_recovery_ticks=0;
     cpu_wall_recovery_left_slide=cpu_wall_buffer_pending=cpu_wall_buffer_attempted=false;
     cpu_wall_jump_hold_frames=0;
+    cpu_tall_wall_climb=false;cpu_tall_wall_start_y=cpu_tall_wall_best_y=0;
     cpu_wall_direction=0;
     cpu_jump_cooldown_frames=0;
   }
@@ -1078,11 +1092,20 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
       cpu_wall_jump_hold_frames=0;
       cpu_jump_hold_frames=cpu_cliff_dash_frames=0;
       cpu_jump_seen_airborne=false;
+      /* X is a route GOAL only when settled on higher solid ground.
+       * Use the longer climb budget while that goal is at least 96px up;
+       * do not extend recovery merely because the human jumps in place. */
+      cpu_tall_wall_climb=(leader->body[0x2b]&4)!=0 &&
+          ((int)word(leader->body+8) <= y-96);
+      cpu_tall_wall_start_y=cpu_tall_wall_best_y=(uint16_t)y;
       if (getenv("MMX_CPU_TRACE"))
-        fprintf(stderr,"[cpu-wall] contact dir=%d action=%u vy=%d slide=%d\n",
+        fprintf(stderr,"[cpu-wall] contact dir=%d action=%u vy=%d slide=%d tall=%d leader_above=%d\n",
                 (int)cpu_wall_direction,(unsigned)follower->body[2],
-                (int16_t)word(follower->body+0x1c),(int)wall_slide);
+                (int16_t)word(follower->body+0x1c),(int)wall_slide,
+                (int)cpu_tall_wall_climb,y-(int)word(leader->body+8));
     }
+    if (cpu_tall_wall_climb && y<(int)cpu_tall_wall_best_y)
+      cpu_tall_wall_best_y=(uint16_t)y;
     bool near=cpu_companion_wall_jump_near(ram,x,y,cpu_wall_direction);
     return cpu_companion_wall_recovery(follower,wall_slide,near,descending);
   }
