@@ -701,6 +701,21 @@ static bool cpu_companion_raised_wall(const uint8_t *ram,int x,int feet,
   }
   return false;
 }
+/* On tall structures the top can be off-screen and outside a useful
+ * terrain scan. A solid vertical FACE across a short approach is still a
+ * wall-climb target if the leader is on its far, higher side. This does NOT
+ * copy the human's jump input: the wall and goal must both be present. */
+static int cpu_companion_wall_face(const uint8_t *ram,int x,int feet,int dir) {
+  if (!ram || !dir) return 0;
+  for (int d=24;d<=96;d+=4) {
+    int wx=x+dir*d;
+    if (MmxWeaponsTerrainSolid(ram,wx,feet-16,false,NULL) &&
+        MmxWeaponsTerrainSolid(ram,wx,feet-36,false,NULL) &&
+        !MmxWeaponsTerrainSolid(ram,wx-dir*12,feet-32,false,NULL))
+      return d;
+  }
+  return 0;
+}
 /* Detect a low or tall solid obstacle directly ahead at chest/leg height,
  * without depending on P1 jumping or standing on a higher platform. Probe
  * non-floor collision so a nearby slope or harmless decoration is not a wall. */
@@ -838,23 +853,31 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
    * wall's top has a valid, walkable landing. */
   bool raised_wall=direction && !short_landing &&
       cpu_companion_raised_wall(ram,x,feet,direction,&wall_distance);
-  bool climb_takeoff=raised_wall && (edge || wall_distance<=48);
+  bool goal_wall=false;
+  if (!raised_wall && direction && !short_landing &&
+      (int)word(leader->body+8)<y-64 && dx*direction>40) {
+    int face=cpu_companion_wall_face(ram,x,feet,direction);
+    goal_wall=face && dx*direction>face && face<=80;
+    if (goal_wall) wall_distance=face;
+  }
+  bool climb_takeoff=(raised_wall || goal_wall) &&
+                     (edge || wall_distance<=48);
   /* Opt-in field diagnostics make real stage geometry inspectable without
    * assuming a screenshot reveals the actual SNES collision classes.
    * This never affects controller input or deterministic guest state. */
   if ((edge || climb_takeoff || blocked || obstacle) && getenv("MMX_CPU_TRACE")) {
     static int last_log=-1000;
     if (snes_frame_counter-last_log>=90) {
-      fprintf(stderr,"[cpu-nav] edge x=%d feet=%d dir=%d p1dx=%d short=%d raised=%d wall_dist=%d grounded=%d cooldown=%u\n",
-              x,feet,direction,dx,(int)short_landing,(int)raised_wall,
-              wall_distance,(int)grounded,(unsigned)cpu_jump_cooldown_frames);
+      fprintf(stderr,"[cpu-nav] edge=%d x=%d feet=%d dir=%d p1dx=%d short=%d raised=%d goalwall=%d wall_dist=%d grounded=%d cooldown=%u\n",
+              (int)edge,x,feet,direction,dx,(int)short_landing,(int)raised_wall,
+              (int)goal_wall,wall_distance,(int)grounded,(unsigned)cpu_jump_cooldown_frames);
       last_log=snes_frame_counter;
     }
   }
   /* In the user's highway gap, the right-hand landing is UP a wall rather
    * than at the current foot level. Permit a deliberate jump into a detected
    * climbable wall, but never launch toward completely unseen/unsafe terrain. */
-  if (edge && !short_landing && !raised_wall)
+  if (edge && !short_landing && !raised_wall && !goal_wall)
     return input&(uint16_t)~(MMX_CPU_LEFT|MMX_CPU_RIGHT|MMX_CPU_JUMP|MMX_CPU_DASH);
   if (!edge && !obstacle && !blocked && !climb_takeoff) return input;
 
