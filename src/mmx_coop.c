@@ -922,7 +922,7 @@ static uint16_t cpu_companion_wall_recovery(const MmxCoopPlayer *f,
       if (getenv("MMX_CPU_TRACE"))
         fprintf(stderr,"[cpu-wall] buffered kick confirmed %u/%u action=18 frame=%d\n",
                 (unsigned)cpu_wall_recovery_jumps,max_kicks,snes_frame_counter);
-      return away|MMX_CPU_JUMP;
+      return (cpu_tall_wall_climb ? toward : away)|MMX_CPU_JUMP;
     }
     /* Native code did not accept the buffer. Release B to re-arm the
      * next opportunity; do not spend a jump or wait for a cooldown. */
