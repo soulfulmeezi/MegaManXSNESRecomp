@@ -40,6 +40,10 @@ static bool cpu_jump_seen_airborne;
  * verified landing; no normal follow inputs may interrupt this sequence. */
 static uint8_t cpu_wall_recovery_phase, cpu_wall_recovery_jumps;
 static uint8_t cpu_wall_recovery_ticks;
+/* A new native wall-slide must follow a real departure from the previous
+ * slide before the next kick is allowed. Prevents double-pressing B while
+ * the original slide action is still latched in a snapshot. */
+static bool cpu_wall_recovery_left_slide;
 static uint8_t cpu_human_seat, cpu_swap_trigger_down, cpu_rescue_cooldown;
 static bool cpu_l2_trigger_held;
 static uint8_t cpu_stall_ticks;
@@ -347,6 +351,7 @@ static void cpu_companion_reset_motion(void) {
   cpu_jump_hold_frames=cpu_jump_cooldown_frames=cpu_cliff_dash_frames=0;
   cpu_jump_seen_airborne=false;
   cpu_wall_recovery_phase=cpu_wall_recovery_jumps=cpu_wall_recovery_ticks=0;
+  cpu_wall_recovery_left_slide=false;
   cpu_jump_direction=cpu_wall_direction=0;
   cpu_stall_ticks=0;cpu_last_x=0;cpu_stall_direction=0;
 }
@@ -843,29 +848,47 @@ static int cpu_companion_air_wall_contact(const uint8_t *ram,int x,int y,
   int dirs[2]={prefer_dir?prefer_dir:1,prefer_dir?-prefer_dir:-1};
   for (unsigned i=0;i<2;++i) {
     int d=dirs[i];
+    /* 19px begins preparing the B-release before the sprite actually
+     * enters the wall's native slide state. Require two vertical samples
+     * to avoid treating isolated floor tiles as a climbable wall. */
     if ((MmxWeaponsTerrainSolid(ram,x+d*11,y-4,false,NULL) ||
-         MmxWeaponsTerrainSolid(ram,x+d*15,y-4,false,NULL)) &&
+         MmxWeaponsTerrainSolid(ram,x+d*15,y-4,false,NULL) ||
+         MmxWeaponsTerrainSolid(ram,x+d*19,y-4,false,NULL)) &&
         (MmxWeaponsTerrainSolid(ram,x+d*11,y-16,false,NULL) ||
-         MmxWeaponsTerrainSolid(ram,x+d*15,y-16,false,NULL)))
+         MmxWeaponsTerrainSolid(ram,x+d*15,y-16,false,NULL) ||
+         MmxWeaponsTerrainSolid(ram,x+d*19,y-16,false,NULL)))
       return d;
   }
   return 0;
 }
-/* Wall-slide recovery outranks follow, attacks, ordinary terrain probes
- * and existing jump-hold logic. It emits native controller inputs, not sprite
- * teleportation, and never presses B more than twice per recovery.
- *
- * SEEk -> B edge (only if actually sliding) -> PUSH away for four polls ->
- * RETURN toward the wall for nine polls -> SEEK again. After two wall
- * kicks, continue to hold the wall side (FINISHED) until solid ground is
- * reported; then cancel immediately and let ordinary terrain-first follow
- * run in the SAME game tick. Any unrelated P1 movement is ignored while
- * active. Waiting for ground after two kicks is intentional: no third
- * wall jump is permitted until a new landing/recovery cycle. */
+/* Wall recovery is the highest-priority locomotion state.
+ * Sense physical contact BEFORE native slide so B can be released; fire B
+ * on the FIRST actionable slide frame. Fixed kick-off/return windows steer
+ * the trajectory but NEVER delay a fresh slide after leaving the last one.
+ * Two kicks maximum, and landing ends the entire cycle immediately. */
 static uint16_t cpu_companion_wall_recovery(const MmxCoopPlayer *f,
                                             bool wall_slide) {
   uint16_t toward=cpu_wall_direction>0 ? MMX_CPU_RIGHT : MMX_CPU_LEFT;
   uint16_t away=cpu_wall_direction>0 ? MMX_CPU_LEFT : MMX_CPU_RIGHT;
+  if (!wall_slide && cpu_wall_recovery_jumps)
+    cpu_wall_recovery_left_slide=true;
+  /* Don't wait out the 4+9-frame steering timer if the native engine has
+   * ALREADY re-entered wall slide after a real departure. Exactly one fresh
+   * B edge, on the first available frame, with no arbitrary cooldown. */
+  bool ready=wall_slide && !(f->input&MMX_CPU_JUMP) &&
+      cpu_wall_recovery_jumps<2 &&
+      (cpu_wall_recovery_jumps==0 || cpu_wall_recovery_left_slide);
+  if (ready) {
+    ++cpu_wall_recovery_jumps;
+    cpu_wall_recovery_left_slide=false;
+    cpu_wall_recovery_phase=MMX_CPU_WALL_PUSH;
+    cpu_wall_recovery_ticks=4;
+    if (getenv("MMX_CPU_TRACE"))
+      fprintf(stderr,"[cpu-wall] jump=%u/2 first-eligible-slide frame=%d dir=%d\n",
+              (unsigned)cpu_wall_recovery_jumps,
+              snes_frame_counter,(int)cpu_wall_direction);
+    return toward|MMX_CPU_JUMP;
+  }
   if (cpu_wall_recovery_phase==MMX_CPU_WALL_PUSH) {
     if (cpu_wall_recovery_ticks) --cpu_wall_recovery_ticks;
     if (!cpu_wall_recovery_ticks) {
@@ -883,17 +906,9 @@ static uint16_t cpu_companion_wall_recovery(const MmxCoopPlayer *f,
     cpu_wall_recovery_phase=MMX_CPU_WALL_FINISHED;
     return toward;
   }
-  /* Every B edge requires a real wall-slide frame and a preceding release.
-   * A normal jump still held on entry is released automatically here. */
-  if (wall_slide && !(f->input & MMX_CPU_JUMP)) {
-    ++cpu_wall_recovery_jumps;
-    cpu_wall_recovery_phase=MMX_CPU_WALL_PUSH;
-    cpu_wall_recovery_ticks=4;
-    if (getenv("MMX_CPU_TRACE"))
-      fprintf(stderr,"[cpu-wall] jump=%u/2 dir=%d\n",
-              (unsigned)cpu_wall_recovery_jumps,(int)cpu_wall_direction);
-    return toward | MMX_CPU_JUMP;
-  }
+  /* If contact preceded the native slide, or B was still held from a
+   * normal jump, this one tick releases B and arms the next possible
+   * native wall-jump press. A premature press would be ignored by X1. */
   cpu_wall_recovery_phase=MMX_CPU_WALL_SEEK;
   return toward;
 }
@@ -966,6 +981,7 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
       fprintf(stderr,"[cpu-wall] landed after %u/2 jump(s)\n",
               (unsigned)cpu_wall_recovery_jumps);
     cpu_wall_recovery_phase=cpu_wall_recovery_jumps=cpu_wall_recovery_ticks=0;
+    cpu_wall_recovery_left_slide=false;
     cpu_wall_direction=0;
     cpu_jump_cooldown_frames=0;
   }
@@ -980,6 +996,7 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
           direction ? direction : (follower->body[0x69]&64 ? 1 : -1));
       cpu_wall_recovery_phase=MMX_CPU_WALL_SEEK;
       cpu_wall_recovery_jumps=cpu_wall_recovery_ticks=0;
+      cpu_wall_recovery_left_slide=false;
       cpu_jump_hold_frames=cpu_cliff_dash_frames=0;
       cpu_jump_seen_airborne=false;
       if (getenv("MMX_CPU_TRACE"))
