@@ -35,6 +35,7 @@ static bool enabled;
 static bool cpu_companion; /* Opt-in local mode; never stored in guest save state. */
 static uint8_t cpu_jump_hold_frames, cpu_jump_cooldown_frames;
 static uint8_t cpu_cliff_dash_frames;
+static bool cpu_jump_seen_airborne;
 /* Host-only high-priority recovery: from first native wall slide until
  * verified landing; no normal follow inputs may interrupt this sequence. */
 static uint8_t cpu_wall_recovery_phase, cpu_wall_recovery_jumps;
@@ -344,6 +345,7 @@ static void shot_ghost_reset(void);
 static void lift_reset(void);
 static void cpu_companion_reset_motion(void) {
   cpu_jump_hold_frames=cpu_jump_cooldown_frames=cpu_cliff_dash_frames=0;
+  cpu_jump_seen_airborne=false;
   cpu_wall_recovery_phase=cpu_wall_recovery_jumps=cpu_wall_recovery_ticks=0;
   cpu_jump_direction=cpu_wall_direction=0;
   cpu_stall_ticks=0;cpu_last_x=0;cpu_stall_direction=0;
@@ -721,6 +723,37 @@ static bool cpu_companion_gap_reachable(const uint8_t *ram,int x,int feet,
   }
   return false;
 }
+/* At a descending junction, X may be on verified LOWER terrain.
+ * A roof-level-only search previously returned no landing and WAIT locked
+ * the CPU at the lip, even with X standing safely on the tier below.
+ * Match the lower candidate's surface to X's grounded foot elevation, and
+ * require support and free headroom on that candidate; never drop toward
+ * an X who is still falling or to an unseen void.
+ * A nearby lower floor is a step-off (DROP), a distant one needs a jump. */
+static bool cpu_companion_lower_landing(const uint8_t *ram,
+                                        int x,int feet,int dir,int leader_feet,
+                                        int *distance_out,int *drop_out) {
+  if (!ram || !dir) return false;
+  for (int d=32;d<=176;d+=8) {
+    int sx=x+dir*d;
+    for (int lower=24;lower<=112;lower+=8) {
+      int floor=feet+lower,surface=0;
+      if (!cpu_companion_walkable(MmxWeaponsTerrainClass(ram,sx,floor)) ||
+          !MmxWeaponsTerrainSolid(ram,sx,floor,true,&surface) ||
+          surface<feet+20 || surface>feet+112 ||
+          abs(surface-leader_feet)>24 ||
+          (d>128 && surface-feet>72) ||
+          !cpu_companion_supported(ram,sx+dir*8,surface+2) ||
+          MmxWeaponsTerrainSolid(ram,sx,surface-20,true,NULL) ||
+          MmxWeaponsTerrainSolid(ram,sx,surface-32,true,NULL))
+        continue;
+      if (distance_out) *distance_out=d;
+      if (drop_out) *drop_out=surface-feet;
+      return true;
+    }
+  }
+  return false;
+}
 /* A normal-height landing check deliberately rejects elevated platforms.
  * A gap ending at a higher vertical wall is different: Zero may leap to the
  * wall, latch onto its native slide and climb with successive wall kicks.
@@ -799,6 +832,24 @@ static bool cpu_companion_enemy_ahead(const uint8_t *r, int x, int y, int direct
     if (dx*direction>=12 && dx*direction<=152 && abs(dy)<=40) return true;
   }
   return false;
+}
+/* A physical wall can be contacted during air action 6/8 before the
+ * native wall-slide action 0x10 appears. Prepare recovery by steering INTO
+ * the sensed face, with B released, so a later slide frame can start a
+ * real wall jump. Contact alone must not count toward the two kicks. */
+static int cpu_companion_air_wall_contact(const uint8_t *ram,int x,int y,
+                                           int prefer_dir) {
+  if (!ram) return 0;
+  int dirs[2]={prefer_dir?prefer_dir:1,prefer_dir?-prefer_dir:-1};
+  for (unsigned i=0;i<2;++i) {
+    int d=dirs[i];
+    if ((MmxWeaponsTerrainSolid(ram,x+d*11,y-4,false,NULL) ||
+         MmxWeaponsTerrainSolid(ram,x+d*15,y-4,false,NULL)) &&
+        (MmxWeaponsTerrainSolid(ram,x+d*11,y-16,false,NULL) ||
+         MmxWeaponsTerrainSolid(ram,x+d*15,y-16,false,NULL)))
+      return d;
+  }
+  return 0;
 }
 /* Wall-slide recovery outranks follow, attacks, ordinary terrain probes
  * and existing jump-hold logic. It emits native controller inputs, not sprite
@@ -895,6 +946,8 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
   }
   bool grounded=(follower->body[0x2b]&4)!=0;
   bool wall_slide=!grounded && follower->body[2]==0x10;
+  int touching_wall=!grounded ?
+      cpu_companion_air_wall_contact(ram,x,y,direction) : 0;
   /* Detect genuine obstruction by observing lack of horizontal progress
    * while repeatedly driving a direction. Useful for moving gates and
    * objects that are not represented in the static terrain map. */
@@ -916,29 +969,43 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
     cpu_wall_direction=0;
     cpu_jump_cooldown_frames=0;
   }
-  if (!grounded && (wall_slide || cpu_wall_recovery_phase!=MMX_CPU_WALL_IDLE)) {
+  /* Wall contact starts a PREPARATION phase even before the native
+   * animation switches to slide. The jump itself is only pressed on a
+   * genuine slide frame: this avoids using a recovery kick too early. */
+  if (!grounded && (wall_slide || touching_wall ||
+                    cpu_wall_recovery_phase!=MMX_CPU_WALL_IDLE)) {
     if (cpu_wall_recovery_phase==MMX_CPU_WALL_IDLE) {
       cpu_wall_direction=(int8_t)(
-          MmxWeaponsTerrainSolid(ram,x+11,y-4,false,NULL) ? 1 :
-          MmxWeaponsTerrainSolid(ram,x-11,y-4,false,NULL) ? -1 :
-          (direction ? direction : (follower->body[0x69]&64 ? 1 : -1)));
+          touching_wall ? touching_wall :
+          direction ? direction : (follower->body[0x69]&64 ? 1 : -1));
       cpu_wall_recovery_phase=MMX_CPU_WALL_SEEK;
       cpu_wall_recovery_jumps=cpu_wall_recovery_ticks=0;
-      /* The old B hold cannot count as a fresh wall-kick press. */
       cpu_jump_hold_frames=cpu_cliff_dash_frames=0;
+      cpu_jump_seen_airborne=false;
+      if (getenv("MMX_CPU_TRACE"))
+        fprintf(stderr,"[cpu-wall] contact dir=%d action=%u vy=%d slide=%d\n",
+                (int)cpu_wall_direction,(unsigned)follower->body[2],
+                (int16_t)word(follower->body+0x1c),(int)wall_slide);
     }
     return cpu_companion_wall_recovery(follower,wall_slide);
   }
   /* Preserve takeoff direction and hold B long enough for a useful ascent,
    * even if P1 changes direction while the CPU is already jumping. */
   if (cpu_jump_hold_frames) {
-    --cpu_jump_hold_frames;
-    uint16_t jump=(cpu_jump_direction>0 ? MMX_CPU_RIGHT : MMX_CPU_LEFT)|MMX_CPU_JUMP;
-    if (cpu_cliff_dash_frames) {
-      jump|=MMX_CPU_DASH;
-      --cpu_cliff_dash_frames;
+    if (!grounded) cpu_jump_seen_airborne=true;
+    if (grounded && cpu_jump_seen_airborne) {
+      /* Native jump has already landed: stop holding B immediately. */
+      cpu_jump_hold_frames=cpu_cliff_dash_frames=0;
+      cpu_jump_seen_airborne=false;
+    } else {
+      --cpu_jump_hold_frames;
+      uint16_t jump=(cpu_jump_direction>0 ? MMX_CPU_RIGHT : MMX_CPU_LEFT)|MMX_CPU_JUMP;
+      if (cpu_cliff_dash_frames) {
+        jump|=MMX_CPU_DASH;
+        --cpu_cliff_dash_frames;
+      }
+      return jump;
     }
-    return jump;
   }
   if (cpu_cliff_dash_frames && !grounded && !wall_slide) {
     /* Preserve momentum briefly toward the raised wall, even when B is
@@ -955,10 +1022,10 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
     static int last_idle_trace=-1000;
     if (snes_frame_counter-last_idle_trace>=120) {
       fprintf(stderr,
-          "[cpu-state] x=%d y=%d dx=%d dir=%d high=%d climb_side=%d action=%u grounded=%d recovery=%u\n",
+          "[cpu-state] x=%d y=%d dx=%d dir=%d high=%d climb_side=%d action=%u grounded=%d wall=%d recovery=%u hold=%u\n",
           x,y,dx,direction,(int)elevated_goal,(int)climb_from_below,
-          (unsigned)follower->body[2],(int)grounded,
-          (unsigned)cpu_wall_recovery_phase);
+          (unsigned)follower->body[2],(int)grounded,touching_wall,
+          (unsigned)cpu_wall_recovery_phase,(unsigned)cpu_jump_hold_frames);
       last_idle_trace=snes_frame_counter;
     }
   }
