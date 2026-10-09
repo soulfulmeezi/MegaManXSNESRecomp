@@ -64,6 +64,7 @@ static bool cpu_l2_trigger_held;
 static uint8_t cpu_stall_ticks;
 static uint8_t cpu_zero_melee_cooldown;
 static bool cpu_zero_dash_was_active;
+static bool cpu_wall_escape_reported;
 static uint16_t cpu_last_x;
 static int8_t cpu_jump_direction, cpu_wall_direction, cpu_stall_direction;
 static unsigned starting_character;
@@ -376,6 +377,7 @@ static void cpu_companion_reset_motion(void) {
   cpu_jump_direction=cpu_wall_direction=0;
   cpu_stall_ticks=0;cpu_last_x=0;cpu_stall_direction=0;
   cpu_zero_melee_cooldown=0;cpu_zero_dash_was_active=false;
+  cpu_wall_escape_reported=false;
 }
 void MmxCoopReset(void) {
   cpu_companion_reset_motion();cpu_human_seat=cpu_swap_trigger_down=cpu_rescue_cooldown=0;
@@ -975,6 +977,32 @@ static bool cpu_companion_wall_jump_near(const uint8_t *ram,int x,int y,int dir)
          (MmxWeaponsTerrainSolid(ram,x+dir*11,y-16,false,NULL) ||
           MmxWeaponsTerrainSolid(ram,x+dir*15,y-16,false,NULL));
 }
+/* A failed wall ascent should retain a safe exit: scan REAL walkable
+ * terrain a short distance AWAY from the collision wall, BELOW Zero's
+ * airborne feet. This is never a synthetic teleport or an invented dash
+ * target. Solid headroom and additional support farther into the shelf
+ * are required before committing to an escape direction. */
+static int cpu_companion_wall_escape(const uint8_t *r,int x,int y,
+                                      int wall_dir,int *distance_out) {
+  if (!r || !wall_dir) return 0;
+  int away=-wall_dir,feet=y+16;
+  for (int d=24;d<=96;d+=8) {
+    int lx=x+away*d;
+    for (int drop=16;drop<=88;drop+=8) {
+      int sample=feet+drop,surface=0;
+      if (!cpu_companion_walkable(MmxWeaponsTerrainClass(r,lx,sample)) ||
+          !MmxWeaponsTerrainSolid(r,lx,sample,true,&surface) ||
+          surface<feet+12 || surface>feet+88 ||
+          MmxWeaponsTerrainSolid(r,lx,surface-20,true,NULL) ||
+          MmxWeaponsTerrainSolid(r,lx,surface-36,true,NULL) ||
+          !cpu_companion_supported(r,lx+away*8,surface+2))
+        continue;
+      if (distance_out) *distance_out=d;
+      return away;
+    }
+  }
+  return 0;
+}
 /* Native and buffered wall-kick input is highest priority.
  * Ordinary recovery is limited to two kicks. A genuine upper-platform goal
  * invokes a taller eight-kick climb instead, using *real* renewed native
@@ -1212,6 +1240,7 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
     cpu_tall_wall_trace_ticks=0;
     cpu_tall_wall_kick_x=cpu_tall_wall_kick_y=0;
     cpu_wall_direction=0;
+    cpu_wall_escape_reported=false;
     cpu_jump_cooldown_frames=0;
   }
   /* Wall contact starts a PREPARATION phase even before the native
@@ -1225,6 +1254,7 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
           direction ? direction : (follower->body[0x69]&64 ? 1 : -1));
       cpu_wall_recovery_phase=MMX_CPU_WALL_SEEK;
       cpu_wall_recovery_jumps=cpu_wall_recovery_ticks=0;
+      cpu_wall_escape_reported=false;
       cpu_wall_recovery_left_slide=cpu_wall_buffer_pending=cpu_wall_buffer_attempted=false;
       cpu_wall_jump_hold_frames=0;
       cpu_jump_hold_frames=cpu_cliff_dash_frames=0;
@@ -1249,6 +1279,31 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
     bool near=cpu_companion_wall_jump_near(ram,x,y,cpu_wall_direction);
     uint16_t wall_input=cpu_companion_wall_recovery(
         follower,wall_slide,near,descending,kick_apex);
+    /* Last-chance retreat: after a confirmed kick has already peaked
+     * and Zero has dropped back to its starting height without finding
+     * another wall slide, direct him to an ACTUALLY SUPPORTED lower shelf.
+     * A Modern-mode Zero can add one native air dash for a distant
+     * landing. X3 mode has a charged buster but no Modern air dash. */
+    if (cpu_wall_recovery_jumps && !wall_slide && !near && descending &&
+        y>=(int)cpu_tall_wall_kick_y &&
+        (follower->body[2]==6 || follower->body[2]==8)) {
+      int escape_dist=0;
+      int escape_dir=cpu_companion_wall_escape(
+          ram,x,y,cpu_wall_direction,&escape_dist);
+      if (escape_dir) {
+        wall_input=(uint16_t)(escape_dir>0?MMX_CPU_RIGHT:MMX_CPU_LEFT);
+        if (follower->character==MMX_COOP_ZERO &&
+            follower->zero.modern.enabled &&
+            !follower->zero.modern.dash_used &&
+            !(follower->input&MMX_CPU_DASH) && escape_dist>=48)
+          wall_input|=MMX_CPU_DASH;
+        if (!cpu_wall_escape_reported && getenv("MMX_CPU_TRACE"))
+          fprintf(stderr,"[cpu-safety] wall-kick retreat x=%d y=%d escape_dir=%d floor_dist=%d modern_airdash=%d\n",
+                  x,y,escape_dir,escape_dist,
+                  (int)((wall_input&MMX_CPU_DASH)!=0));
+        cpu_wall_escape_reported=true;
+      }
+    }
     if (cpu_tall_wall_climb && getenv("MMX_CPU_TRACE") &&
         cpu_wall_recovery_jumps && cpu_tall_wall_trace_ticks<48) {
       unsigned tick=cpu_tall_wall_trace_ticks++;
