@@ -627,6 +627,35 @@ static bool cpu_companion_supported(const uint8_t *ram, int x, int feet) {
     if (MmxWeaponsTerrainSolid(ram,x,feet+depth,true,NULL)) return true;
   return false;
 }
+/* A pit jump needs a plausible *landing*, not just a nearby drop.
+ * Sample only solid walkable terrain near the follower's current foot level.
+ * This is a conservative short-jump planner, not a proof of a clear arc or a
+ * replacement for native moving-platform contacts. */
+static bool cpu_companion_landing(const uint8_t *ram,int x,int feet) {
+  for (int delta=-20;delta<=24;delta+=4) {
+    int py=feet+delta;
+    unsigned tile=MmxWeaponsTerrainClass(ram,x,py);
+    if (!(tile==0x13 || (tile>=1 && tile<=12) ||
+          (tile>=0x34 && tile<=0x38) ||
+          (tile>=0x3b && tile<=0x3d))) continue;
+    int surface=0;
+    if (MmxWeaponsTerrainSolid(ram,x,py,true,&surface) &&
+        surface>=feet-20 && surface<=feet+24) return true;
+  }
+  return false;
+}
+static bool cpu_companion_gap_reachable(const uint8_t *ram,int x,int feet,int direction) {
+  /* A normal jump without dash has limited horizontal reach. Requiring
+   * support 40..96px ahead avoids launching toward endless empty space.
+   * Longer jumps can be added once dash-jump trajectories are modelled. */
+  for (int distance=40;distance<=96;distance+=8) {
+    int landing_x=x+direction*distance;
+    if (cpu_companion_landing(ram,landing_x,feet) &&
+        !MmxWeaponsTerrainSolid(ram,landing_x,feet-28,false,NULL))
+      return true;
+  }
+  return false;
+}
 /* Detect a low or tall solid obstacle directly ahead at chest/leg height,
  * without depending on P1 jumping or standing on a higher platform. Probe
  * non-floor collision so a nearby slope or harmless decoration is not a wall. */
@@ -735,15 +764,18 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
     input|=MMX_CPU_FIRE;
 
   if (!grounded || !direction) return input;
-  int ahead=x+direction*28,feet=y+16;
+  int ahead=x+direction*22,feet=y+16;
   bool edge=cpu_companion_supported(ram,x,feet) &&
       !cpu_companion_supported(ram,ahead,feet);
   bool obstacle=cpu_companion_obstacle_ahead(ram,x,y,direction);
   bool blocked=cpu_stall_ticks>=10;
-  bool leader_higher=(int)word(leader->body+8)<y-24 && abs(dx)<144;
-  /* A wall or a stuck movement input independently triggers a jump; X
-   * does not have to jump first. */
-  if (!edge && !obstacle && !blocked && !leader_higher) return input;
+  /* P1's Y position and B button must NOT influence CPU jump decisions.
+   * These checks use the follower's own ground and obstruction state only.
+   * If the ground ends ahead and there is no reachable landing, wait.
+   * Do this before obstruction/stall reactions to avoid walking into void. */
+  if (edge && !cpu_companion_gap_reachable(ram,x,feet,direction))
+    return input&(uint16_t)~(MMX_CPU_LEFT|MMX_CPU_RIGHT|MMX_CPU_JUMP);
+  if (!edge && !obstacle && !blocked) return input;
 
   bool headroom=true;
   for (int offset=-6;offset<=6;offset+=6) {
