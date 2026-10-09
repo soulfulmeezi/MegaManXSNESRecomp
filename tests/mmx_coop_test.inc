@@ -1190,7 +1190,11 @@ static void coop_cpu_companion_checks(const char *fixture) {
   }
 
   /* Ground after TWO jumps must release high-priority wall state in the
-   * same tick; once landed the CPU may follow independently again. */
+   * same tick; once landed the CPU may follow independently again.
+   * Place X inside the 40px dead zone so this specifically checks that
+   * recovery does not fire an extra kick, not ordinary obstacle behavior. */
+  s.players[0].body[5]=s.players[1].body[5];
+  s.players[0].body[6]=s.players[1].body[6];
   s.players[1].body[0x2b]|=4;
   s.players[1].body[2]=0;
   MmxCoopSetState(&s);
@@ -1210,6 +1214,8 @@ static void coop_cpu_companion_checks(const char *fixture) {
   MmxCoopPoll(0,0);s=MmxCoopGetState();
   check((s.players[1].input&SNES_PAD_B)!=0,
       "wall recovery: one kick occurs before early landing");
+  s.players[0].body[5]=s.players[1].body[5];
+  s.players[0].body[6]=s.players[1].body[6];
   s.players[1].body[0x2b]|=4;
   s.players[1].body[2]=0;
   MmxCoopSetState(&s);
