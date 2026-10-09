@@ -642,9 +642,21 @@ static bool cpu_companion_supported(const uint8_t *ram, int x, int feet) {
  * Checking both 20 and 28 pixels ahead lets Zero notice an edge before
  * his sprite crosses it. Never sample P1's position or jump input here. */
 static bool cpu_companion_ground_missing(const uint8_t *ram,int x,int feet,int dir) {
-  if (!ram || !dir || !cpu_companion_supported(ram,x,feet)) return false;
-  return !cpu_companion_supported(ram,x+dir*20,feet) ||
-         !cpu_companion_supported(ram,x+dir*28,feet);
+  if (!ram || !dir) return false;
+  bool here=cpu_companion_supported(ram,x,feet);
+  bool ahead20=cpu_companion_supported(ram,x+dir*20,feet);
+  bool ahead28=cpu_companion_supported(ram,x+dir*28,feet);
+  /* Instrument the real per-tick sensor even when it finds NO edge.
+   * This proves that the AI checks terrain before the walking decision. */
+  if (getenv("MMX_CPU_TRACE")) {
+    static int last_trace=-1000;
+    if (snes_frame_counter-last_trace>=120) {
+      fprintf(stderr,"[cpu-sense] x=%d feet=%d dir=%d ground=%d ahead20=%d ahead28=%d\n",
+              x,feet,dir,(int)here,(int)ahead20,(int)ahead28);
+      last_trace=snes_frame_counter;
+    }
+  }
+  return here && (!ahead20 || !ahead28);
 }
 /* A pit jump needs a plausible *landing*, not just a nearby drop.
  * Sample only solid walkable terrain near the follower's current foot level.
