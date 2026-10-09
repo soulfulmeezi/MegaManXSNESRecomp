@@ -795,7 +795,7 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
     cpu_wall_push_direction=(int8_t)-wall_direction;
     cpu_wall_push_frames=4;
     cpu_wall_return_frames=9;
-    cpu_wall_kick_cooldown=18;
+    cpu_wall_kick_cooldown=12;
     return (wall_direction>0 ? MMX_CPU_RIGHT : MMX_CPU_LEFT)|MMX_CPU_JUMP;
   }
   /* Preserve takeoff direction and hold B long enough for a useful ascent,
@@ -842,7 +842,7 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
   /* Opt-in field diagnostics make real stage geometry inspectable without
    * assuming a screenshot reveals the actual SNES collision classes.
    * This never affects controller input or deterministic guest state. */
-  if ((edge || climb_takeoff) && getenv("MMX_CPU_TRACE")) {
+  if ((edge || climb_takeoff || blocked || obstacle) && getenv("MMX_CPU_TRACE")) {
     static int last_log=-1000;
     if (snes_frame_counter-last_log>=90) {
       fprintf(stderr,"[cpu-nav] edge x=%d feet=%d dir=%d p1dx=%d short=%d raised=%d wall_dist=%d grounded=%d cooldown=%u\n",
@@ -870,7 +870,9 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
     return input;
   }
   cpu_jump_hold_frames=12;
-  cpu_jump_cooldown_frames=48;
+  /* A climb attempt can repeat shortly after a failed takeoff; ordinary
+   * short-hop/ledge navigation retains the longer anti-spam cooldown. */
+  cpu_jump_cooldown_frames=climb_takeoff ? 24 : 48;
   cpu_jump_direction=(int8_t)direction;
   /* An elevated wall >~72px away can need more horizontal range than a
    * normal hop. Ask Zero to dash-jump as part of his own route choice;
