@@ -36,7 +36,9 @@ static bool cpu_companion; /* Opt-in local mode; never stored in guest save stat
 static uint8_t cpu_jump_hold_frames, cpu_jump_cooldown_frames;
 static uint8_t cpu_wall_kick_cooldown, cpu_wall_push_frames;
 static uint8_t cpu_human_seat, cpu_swap_chord_down, cpu_rescue_cooldown;
-static int8_t cpu_jump_direction, cpu_wall_push_direction;
+static uint8_t cpu_stall_ticks;
+static uint16_t cpu_last_x;
+static int8_t cpu_jump_direction, cpu_wall_push_direction, cpu_stall_direction;
 static unsigned starting_character;
 _Static_assert(sizeof(MmxCoopPlayer) == 2276, "Co-op player save ABI");
 _Static_assert(sizeof(MmxCoopState) == 4664, "Co-op save ABI");
@@ -329,6 +331,7 @@ static void cpu_companion_reset_motion(void) {
   cpu_jump_hold_frames=cpu_jump_cooldown_frames=0;
   cpu_wall_kick_cooldown=cpu_wall_push_frames=0;
   cpu_jump_direction=cpu_wall_push_direction=0;
+  cpu_stall_ticks=0;cpu_last_x=0;cpu_stall_direction=0;
 }
 void MmxCoopReset(void) {
   cpu_companion_reset_motion();cpu_human_seat=cpu_swap_chord_down=cpu_rescue_cooldown=0;
@@ -616,9 +619,10 @@ static bool cpu_companion_supported(const uint8_t *ram, int x, int feet) {
  * non-floor collision so a nearby slope or harmless decoration is not a wall. */
 static bool cpu_companion_obstacle_ahead(const uint8_t *ram,int x,int y,int direction) {
   if (!direction) return false;
-  for (int look=12;look<=22;look+=5) {
+  for (int look=14;look<=44;look+=6) {
     int wall=x+direction*look;
-    if (MmxWeaponsTerrainSolid(ram,wall,y-5,false,NULL) ||
+    if (MmxWeaponsTerrainSolid(ram,wall,y+5,false,NULL) ||
+        MmxWeaponsTerrainSolid(ram,wall,y-5,false,NULL) ||
         MmxWeaponsTerrainSolid(ram,wall,y-14,false,NULL)) return true;
   }
   return false;
@@ -640,7 +644,8 @@ static bool cpu_companion_enemy_ahead(const uint8_t *r, int x, int y, int direct
 /* Feed native co-op pad input rather than moving sprites directly.
  * Offline-only host timers preserve variable-height ground jumps and allow
  * fresh B press edges for wall kicks. No co-op save ABI or netplay changes. */
-static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat) {
+static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
+                                     uint16_t leader_pad) {
   const MmxCoopPlayer *leader=&state.players[controlled_seat],
                       *follower=&state.players[controlled_seat^1];
   if (!ram || !state.initialized || state.menu_owner || state.scene_owner ||
@@ -652,9 +657,24 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
   }
   int dx=(int)word(leader->body+5)-(int)word(follower->body+5);
   int direction=dx>40 ? 1 : dx< -40 ? -1 : 0;
+  /* In couch CPU mode the other character may get ahead of the human.
+   * If X is moving TOWARD that character, honor the intended stage route
+   * instead of forcing Zero to turn around and ignore the obstacle ahead.
+   * Keep the override local to one shared-screen width. */
+  int intent=(leader_pad&MMX_CPU_RIGHT) && !(leader_pad&MMX_CPU_LEFT) ? 1 :
+             (leader_pad&MMX_CPU_LEFT) && !(leader_pad&MMX_CPU_RIGHT) ? -1 : 0;
+  if (intent && (dx*intent)<-40 && abs(dx)<=176) direction=intent;
   int x=(int)word(follower->body+5),y=(int)word(follower->body+8);
   bool grounded=(follower->body[0x2b]&4)!=0;
   bool wall_slide=!grounded && follower->body[2]==0x10;
+  /* Detect genuine obstruction by observing lack of horizontal progress
+   * while repeatedly driving a direction. Useful for moving gates and
+   * objects that are not represented in the static terrain map. */
+  if (grounded && direction && direction==cpu_stall_direction &&
+      abs(x-(int)cpu_last_x)<=1) {
+    if (cpu_stall_ticks<24) ++cpu_stall_ticks;
+  } else cpu_stall_ticks=0;
+  cpu_last_x=(uint16_t)x;cpu_stall_direction=(int8_t)direction;
   uint16_t input=direction>0 ? MMX_CPU_RIGHT : direction<0 ? MMX_CPU_LEFT : 0;
   if (cpu_jump_cooldown_frames) --cpu_jump_cooldown_frames;
   if (cpu_wall_kick_cooldown) --cpu_wall_kick_cooldown;
@@ -696,9 +716,11 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
   bool edge=cpu_companion_supported(ram,x,feet) &&
       !cpu_companion_supported(ram,ahead,feet);
   bool obstacle=cpu_companion_obstacle_ahead(ram,x,y,direction);
+  bool blocked=cpu_stall_ticks>=10;
   bool leader_higher=(int)word(leader->body+8)<y-24 && abs(dx)<144;
-  /* A wall is independently actionable: Zero need not wait for X to jump. */
-  if (!edge && !obstacle && !leader_higher) return input;
+  /* A wall or a stuck movement input independently triggers a jump; X
+   * does not have to jump first. */
+  if (!edge && !obstacle && !blocked && !leader_higher) return input;
 
   bool headroom=true;
   for (int offset=-6;offset<=6;offset+=6) {
@@ -742,7 +764,7 @@ void MmxCoopPoll(uint16_t p1, uint16_t p2) {
     cpu_swap_chord_down=held;
     if (held) p1&=(uint16_t)~chord;
     inputs[cpu_human_seat]=p1&4095;
-    inputs[cpu_human_seat^1]=cpu_companion_input(g_ram,cpu_human_seat);
+    inputs[cpu_human_seat^1]=cpu_companion_input(g_ram,cpu_human_seat,p1);
   } else {
     cpu_swap_chord_down=0;
   }
