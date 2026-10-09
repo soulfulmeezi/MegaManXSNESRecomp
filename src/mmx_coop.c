@@ -35,13 +35,15 @@ static bool enabled;
 static bool cpu_companion; /* Opt-in local mode; never stored in guest save state. */
 static uint8_t cpu_jump_hold_frames, cpu_jump_cooldown_frames;
 static uint8_t cpu_cliff_dash_frames;
-static uint8_t cpu_wall_kick_cooldown, cpu_wall_push_frames;
-static uint8_t cpu_wall_return_frames;
+/* Host-only high-priority recovery: from first native wall slide until
+ * verified landing; no normal follow inputs may interrupt this sequence. */
+static uint8_t cpu_wall_recovery_phase, cpu_wall_recovery_jumps;
+static uint8_t cpu_wall_recovery_ticks;
 static uint8_t cpu_human_seat, cpu_swap_trigger_down, cpu_rescue_cooldown;
 static bool cpu_l2_trigger_held;
 static uint8_t cpu_stall_ticks;
 static uint16_t cpu_last_x;
-static int8_t cpu_jump_direction, cpu_wall_push_direction, cpu_stall_direction;
+static int8_t cpu_jump_direction, cpu_wall_direction, cpu_stall_direction;
 static unsigned starting_character;
 _Static_assert(sizeof(MmxCoopPlayer) == 2276, "Co-op player save ABI");
 _Static_assert(sizeof(MmxCoopState) == 4664, "Co-op save ABI");
@@ -342,8 +344,8 @@ static void shot_ghost_reset(void);
 static void lift_reset(void);
 static void cpu_companion_reset_motion(void) {
   cpu_jump_hold_frames=cpu_jump_cooldown_frames=cpu_cliff_dash_frames=0;
-  cpu_wall_kick_cooldown=cpu_wall_push_frames=cpu_wall_return_frames=0;
-  cpu_jump_direction=cpu_wall_push_direction=0;
+  cpu_wall_recovery_phase=cpu_wall_recovery_jumps=cpu_wall_recovery_ticks=0;
+  cpu_jump_direction=cpu_wall_direction=0;
   cpu_stall_ticks=0;cpu_last_x=0;cpu_stall_direction=0;
 }
 void MmxCoopReset(void) {
@@ -623,6 +625,10 @@ enum {
   MMX_CPU_LEFT = 1u << 6, MMX_CPU_RIGHT = 1u << 7,
   MMX_CPU_DASH = 1u << 8
 };
+enum {
+  MMX_CPU_WALL_IDLE, MMX_CPU_WALL_SEEK, MMX_CPU_WALL_PUSH,
+  MMX_CPU_WALL_RETURN, MMX_CPU_WALL_FINISHED
+};
 /* Both X and Zero stand about 16 pixels above their feet. Probe several pixels
  * below the feet so a small step down does not register as a bottomless pit.
  * A probe is terrain only; moving platforms and scripted geometry need a
@@ -751,6 +757,52 @@ static bool cpu_companion_enemy_ahead(const uint8_t *r, int x, int y, int direct
   }
   return false;
 }
+/* Wall-slide recovery outranks follow, attacks, ordinary terrain probes
+ * and existing jump-hold logic. It emits native controller inputs, not sprite
+ * teleportation, and never presses B more than twice per recovery.
+ *
+ * SEEk -> B edge (only if actually sliding) -> PUSH away for four polls ->
+ * RETURN toward the wall for nine polls -> SEEK again. After two wall
+ * kicks, continue to hold the wall side (FINISHED) until solid ground is
+ * reported; then cancel immediately and let ordinary terrain-first follow
+ * run in the SAME game tick. Any unrelated P1 movement is ignored while
+ * active. Waiting for ground after two kicks is intentional: no third
+ * wall jump is permitted until a new landing/recovery cycle. */
+static uint16_t cpu_companion_wall_recovery(const MmxCoopPlayer *f,
+                                            bool wall_slide) {
+  uint16_t toward=cpu_wall_direction>0 ? MMX_CPU_RIGHT : MMX_CPU_LEFT;
+  uint16_t away=cpu_wall_direction>0 ? MMX_CPU_LEFT : MMX_CPU_RIGHT;
+  if (cpu_wall_recovery_phase==MMX_CPU_WALL_PUSH) {
+    if (cpu_wall_recovery_ticks) --cpu_wall_recovery_ticks;
+    if (!cpu_wall_recovery_ticks) {
+      cpu_wall_recovery_phase=MMX_CPU_WALL_RETURN;
+      cpu_wall_recovery_ticks=9;
+    }
+    return away;
+  }
+  if (cpu_wall_recovery_phase==MMX_CPU_WALL_RETURN) {
+    if (cpu_wall_recovery_ticks) --cpu_wall_recovery_ticks;
+    if (!cpu_wall_recovery_ticks) cpu_wall_recovery_phase=MMX_CPU_WALL_SEEK;
+    return toward;
+  }
+  if (cpu_wall_recovery_jumps>=2) {
+    cpu_wall_recovery_phase=MMX_CPU_WALL_FINISHED;
+    return toward;
+  }
+  /* Every B edge requires a real wall-slide frame and a preceding release.
+   * A normal jump still held on entry is released automatically here. */
+  if (wall_slide && !(f->input & MMX_CPU_JUMP)) {
+    ++cpu_wall_recovery_jumps;
+    cpu_wall_recovery_phase=MMX_CPU_WALL_PUSH;
+    cpu_wall_recovery_ticks=4;
+    if (getenv("MMX_CPU_TRACE"))
+      fprintf(stderr,"[cpu-wall] jump=%u/2 dir=%d\n",
+              (unsigned)cpu_wall_recovery_jumps,(int)cpu_wall_direction);
+    return toward | MMX_CPU_JUMP;
+  }
+  cpu_wall_recovery_phase=MMX_CPU_WALL_SEEK;
+  return toward;
+}
 /* Feed native co-op pad input rather than moving sprites directly.
  * Offline-only host timers preserve variable-height ground jumps and allow
  * fresh B press edges for wall kicks. No co-op save ABI or netplay changes. */
@@ -787,39 +839,29 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
   cpu_last_x=(uint16_t)x;cpu_stall_direction=(int8_t)direction;
   uint16_t input=direction>0 ? MMX_CPU_RIGHT : direction<0 ? MMX_CPU_LEFT : 0;
   if (cpu_jump_cooldown_frames) --cpu_jump_cooldown_frames;
-  if (cpu_wall_kick_cooldown) --cpu_wall_kick_cooldown;
-
-  /* A reliable wall-jump cycle has three phases: kick, brief separation,
-   * then re-approach while rising so the native wall-slide can re-engage.
-   * Eight frames of continuous push AWAY previously moved Zero too far
-   * from the wall; gravity could win before he found it again. */
-  if (cpu_wall_push_frames) {
-    --cpu_wall_push_frames;
-    return cpu_wall_push_direction>0 ? MMX_CPU_RIGHT : MMX_CPU_LEFT;
+  /* This is the highest-priority locomotion state. A landing exits
+   * immediately, even when only one wall jump has been performed. It
+   * is checked BEFORE any recovery B press or phase change. */
+  if (grounded && cpu_wall_recovery_phase!=MMX_CPU_WALL_IDLE) {
+    if (getenv("MMX_CPU_TRACE"))
+      fprintf(stderr,"[cpu-wall] landed after %u/2 jump(s)\n",
+              (unsigned)cpu_wall_recovery_jumps);
+    cpu_wall_recovery_phase=cpu_wall_recovery_jumps=cpu_wall_recovery_ticks=0;
+    cpu_wall_direction=0;
+    cpu_jump_cooldown_frames=0;
   }
-  if (cpu_wall_return_frames) {
-    --cpu_wall_return_frames;
-    return cpu_wall_push_direction>0 ? MMX_CPU_LEFT : MMX_CPU_RIGHT;
-  }
-  if (wall_slide && cpu_jump_hold_frames) {
-    /* An ordinary B hold is not a new wall-jump press. Release it first. */
-    cpu_jump_hold_frames=cpu_cliff_dash_frames=0;
-    return input;
-  }
-  if (wall_slide && !cpu_wall_kick_cooldown && !(follower->input&MMX_CPU_JUMP)) {
-    /* Action $10 is the original native wall-slide. Jump while still against
-     * the wall, then push away. Repeat if it becomes a wall-slide again.
-     * This is NOT a permanent wall cling or an artificial vertical teleport. */
-    int wall_direction=
-        MmxWeaponsTerrainSolid(ram,x+11,y-4,false,NULL) ? 1 :
-        MmxWeaponsTerrainSolid(ram,x-11,y-4,false,NULL) ? -1 :
-        (direction ? direction : (follower->body[0x69]&64 ? 1 : -1));
-    cpu_cliff_dash_frames=0; /* Braking for native wall-kick input. */
-    cpu_wall_push_direction=(int8_t)-wall_direction;
-    cpu_wall_push_frames=4;
-    cpu_wall_return_frames=9;
-    cpu_wall_kick_cooldown=12;
-    return (wall_direction>0 ? MMX_CPU_RIGHT : MMX_CPU_LEFT)|MMX_CPU_JUMP;
+  if (!grounded && (wall_slide || cpu_wall_recovery_phase!=MMX_CPU_WALL_IDLE)) {
+    if (cpu_wall_recovery_phase==MMX_CPU_WALL_IDLE) {
+      cpu_wall_direction=(int8_t)(
+          MmxWeaponsTerrainSolid(ram,x+11,y-4,false,NULL) ? 1 :
+          MmxWeaponsTerrainSolid(ram,x-11,y-4,false,NULL) ? -1 :
+          (direction ? direction : (follower->body[0x69]&64 ? 1 : -1)));
+      cpu_wall_recovery_phase=MMX_CPU_WALL_SEEK;
+      cpu_wall_recovery_jumps=cpu_wall_recovery_ticks=0;
+      /* The old B hold cannot count as a fresh wall-kick press. */
+      cpu_jump_hold_frames=cpu_cliff_dash_frames=0;
+    }
+    return cpu_companion_wall_recovery(follower,wall_slide);
   }
   /* Preserve takeoff direction and hold B long enough for a useful ascent,
    * even if P1 changes direction while the CPU is already jumping. */
