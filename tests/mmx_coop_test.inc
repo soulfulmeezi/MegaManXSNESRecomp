@@ -1128,6 +1128,39 @@ static void coop_cpu_companion_checks(const char *fixture) {
   check(!(s.players[1].input&SNES_PAD_B),
       "CPU wall-jump cooldown prevents per-frame retriggering");
 
+  /* The human can run toward a companion who is already AHEAD: do not
+   * force the CPU to turn away from an approaching obstacle. A stationary
+   * companion with valid ground should also attempt its own jump after
+   * repeated left/right movement inputs fail to make progress. */
+  MmxCoopSetCpuCompanion(false);
+  MmxCoopSetCpuCompanion(true);
+  s=MmxCoopGetState();
+  s.players[1].body[2]=0;s.players[1].body[0x2b]|=4;
+  unsigned fx=coop_x(&s.players[1]),fy=coop_y(&s.players[1]);
+  int route=(fx>110)?1:-1; /* Keep the human inside the stage origin. */
+  unsigned lx=(unsigned)((int)fx-route*80);
+  s.players[0].body[5]=(uint8_t)lx;
+  s.players[0].body[6]=(uint8_t)(lx>>8);
+  s.players[0].body[8]=(uint8_t)fy;
+  s.players[0].body[9]=(uint8_t)(fy>>8);
+  MmxCoopSetState(&s);
+  unsigned toward=route>0?SNES_PAD_RIGHT:SNES_PAD_LEFT;
+  MmxCoopPoll((uint16_t)toward,0);
+  s=MmxCoopGetState();
+  check(s.players[1].input&toward,
+      "CPU follows human travel intent when companion is already ahead");
+  bool jumped=false;
+  for(unsigned ticks=0;ticks<24;++ticks) {
+    /* Intentionally hold the snapshot motion still to simulate a solid,
+     * unrepresented object stopping the companion's horizontal progress. */
+    MmxCoopPoll((uint16_t)toward,0);
+    s=MmxCoopGetState();
+    if(s.players[1].input&SNES_PAD_B) {jumped=true;break;}
+  }
+  check(jumped,"stationary CPU eventually attempts an independent jump");
+  MmxCoopSetCpuCompanion(false);
+  MmxCoopSetCpuCompanion(true);
+
   /* Select+R switches the physical P1 controller to Zero without swapping
    * native actor slots, whose distinct weapons and death logic must remain. */
   MmxCoopPoll(0,0);
