@@ -1049,6 +1049,410 @@ static void coop_slime_checks(const char *fixture,uint8_t *start,uint8_t *expect
 #include "mmx_sigma_test.inc"
 #include "mmx_coop_bounce_test.inc"
 #include "mmx_hadouken_test.inc"
+/* These decision checks require no game physics and verify that a terrain
+ * warning is resolved BEFORE ordinary left/right follow input is issued.
+ * The actual sensors and jump physics still need a ROM-backed level test. */
+static void coop_cpu_sensing_checks(void) {
+  check(MmxCoopCpuChooseMove(true,true,false,false,false,false)==MMX_CPU_MOVE_JUMP,
+      "ground probe: missing ground with a landing means jump");
+  check(MmxCoopCpuChooseMove(true,false,false,false,false,true)==MMX_CPU_MOVE_WAIT,
+      "ground probe: an unsafe pit beats follow/stall movement");
+  check(MmxCoopCpuChooseMove(true,false,true,false,false,false)==MMX_CPU_MOVE_CLIMB,
+      "ground probe: pit with climbable destination chooses wall approach");
+  check(MmxCoopCpuChooseMove(false,false,true,true,false,false)==MMX_CPU_MOVE_CLIMB,
+      "wall probe: a close wall below a raised destination initiates climb");
+  check(MmxCoopCpuChooseMove(false,false,true,false,false,false)==MMX_CPU_MOVE_WALK,
+      "wall probe: a distant wall doesn't force premature jump");
+  check(MmxCoopCpuChooseMove(false,false,false,false,false,true)==MMX_CPU_MOVE_JUMP,
+      "obstacle probe: a solid blocker triggers independent jump");
+  check(MmxCoopCpuChooseMove(false,false,false,false,false,false)==MMX_CPU_MOVE_WALK,
+      "terrain clear: ordinary following remains intact");
+  check(MmxCoopCpuChooseMove(true,false,false,false,true,false)==MMX_CPU_MOVE_DROP,
+      "lower landing: safe near ledge permits walking down toward X");
+  check(MmxCoopCpuChooseMove(true,true,false,false,true,false)==MMX_CPU_MOVE_DROP,
+      "lower landing: short drop has priority over unnecessary upward jump");
+  check(MmxCoopCpuChooseMove(true,false,false,false,false,false)==MMX_CPU_MOVE_WAIT,
+      "lower landing: no verified ground still means wait at the lip");
+  check(MmxCoopCpuChooseClimbDirection(0,24,0)==1,
+      "high goal directly above: choose nearby right-hand wall");
+  check(MmxCoopCpuChooseClimbDirection(0,0,20)==-1,
+      "high goal directly above: choose nearby left-hand wall");
+  check(MmxCoopCpuChooseClimbDirection(0,48,24)==-1,
+      "high goal directly above: prefer nearer climb wall");
+  check(MmxCoopCpuChooseClimbDirection(30,24,10)==1,
+      "horizontal preference directs climb to player's side");
+  check(MmxCoopCpuChooseClimbDirection(30,0,10)==0,
+      "never divert away from player to an unrelated wall");
+  check(MmxCoopCpuChooseClimbDirection(0,0,0)==0,
+      "do not invent wall direction when sensors see none");
+}
+/* Opt-in local companion controller checks against a real, loaded X1
+ * stage snapshot. In CI the private ROM and fixture are supplied externally. */
+static void coop_cpu_companion_checks(const char *fixture) {
+  coop_cpu_sensing_checks();
+  MmxCoopDisable();
+  check(RtlLoadSnapshot(fixture), "CPU companion fixture loads");
+  check(MmxCoopEnable(MMX_COOP_X), "CPU companion enables normal co-op");
+  coop_frames(8,0,0);
+  MmxCoopState s=MmxCoopGetState();
+  unsigned x=coop_x(&s.players[0]),y=coop_y(&s.players[0]);
+  check(coop_place_fixture_partner(x+32,y), "CPU companion partner joins");
+  s=MmxCoopGetState();
+  unsigned follow_x=coop_x(&s.players[1]),follow_y=coop_y(&s.players[1]);
+  /* X jumping directly above Zero is NOT a reason for Zero to jump. */
+  unsigned leader_x=follow_x,leader_y=follow_y-48;
+  s.players[0].body[5]=(uint8_t)leader_x;
+  s.players[0].body[6]=(uint8_t)(leader_x>>8);
+  s.players[0].body[8]=(uint8_t)leader_y;
+  s.players[0].body[9]=(uint8_t)(leader_y>>8);
+  s.players[1].body[0x2b]|=4; /* Native ground-contact bit. */
+  s.stage_pending=0;
+  MmxCoopSetState(&s);
+  MmxCoopSetCpuCompanion(true);
+  MmxCoopPoll(SNES_PAD_B,0);
+  s=MmxCoopGetState();
+  check(!(s.players[1].input&SNES_PAD_B),
+      "CPU ignores X's jump button and vertical elevation");
+
+  /* Move X to the right on the same tier. With no changes to the CPU's
+   * own x position for 10+ polls, its grounded stall detection should
+   * independently request a B jump to clear its own obstacle. */
+  leader_x=follow_x+80;leader_y=follow_y;
+  s.players[0].body[5]=(uint8_t)leader_x;
+  s.players[0].body[6]=(uint8_t)(leader_x>>8);
+  s.players[0].body[8]=(uint8_t)leader_y;
+  s.players[0].body[9]=(uint8_t)(leader_y>>8);
+  MmxCoopSetState(&s);
+  bool autonomous_takeoff=false;
+  for(unsigned wait=0;wait<24;++wait) {
+    MmxCoopPoll(0,0);
+    s=MmxCoopGetState();
+    if((s.players[1].input&(SNES_PAD_RIGHT|SNES_PAD_B))==
+       (SNES_PAD_RIGHT|SNES_PAD_B)) {autonomous_takeoff=true;break;}
+  }
+  check(autonomous_takeoff,
+      "CPU independently starts an obstacle jump without player B");
+  /* Simulate leaving the ground after takeoff. Holding the physical B
+   * button through a full ascent (now 21 total frames, versus 13 earlier)
+   * is required to maximize the native X1/X3 jump controller. The hold
+   * must still stop immediately if the engine reports a real landing. */
+  s.players[1].body[0x2b]&=(uint8_t)~4;
+  MmxCoopSetState(&s);
+  const unsigned enemy=0xe68, target_x=follow_x+72;
+  g_ram[enemy]=1;g_ram[enemy+14]=1;g_ram[enemy+0x27]=15;
+  g_ram[enemy+5]=(uint8_t)target_x;g_ram[enemy+6]=(uint8_t)(target_x>>8);
+  g_ram[enemy+8]=(uint8_t)follow_y;g_ram[enemy+9]=(uint8_t)(follow_y>>8);
+  for (unsigned tick=0;tick<20;++tick) {
+    g_ram[0xb9c]=(uint8_t)tick;
+    MmxCoopPoll(0,0);s=MmxCoopGetState();
+    check((s.players[1].input&(SNES_PAD_RIGHT|SNES_PAD_B))==
+        (SNES_PAD_RIGHT|SNES_PAD_B) && !(s.players[1].input&SNES_PAD_Y),
+        "CPU companion holds jump through the longer ascent without shooting");
+  }
+  /* With B released and the follower still airborne, native auto-fire
+   * resumes. Restoring ground contact during cooldown must not cause
+   * immediate re-jumps while the leader remains elevated. */
+  g_ram[0xb9c]=24;
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check((s.players[1].input&(SNES_PAD_RIGHT|SNES_PAD_Y))==
+      (SNES_PAD_RIGHT|SNES_PAD_Y) && !(s.players[1].input&SNES_PAD_B),
+      "CPU companion releases jump and resumes timed enemy fire");
+  s.players[1].body[0x2b]|=4;
+  MmxCoopSetState(&s);
+  g_ram[0xb9c]=25;
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check(!(s.players[1].input&SNES_PAD_B),
+      "jump cooldown prevents immediate repeated takeoff");
+  g_ram[enemy]=0;
+
+  /* High-priority wall-slide recovery. It must ignore player motion,
+   * perform exactly two native wall-kick press edges, and stop jumping
+   * until ground contact is confirmed. Test with a controlled wall-slide
+   * snapshot so no player input/animation triggers the recovery. */
+  MmxCoopSetCpuCompanion(false);
+  MmxCoopSetCpuCompanion(true);
+  s=MmxCoopGetState();
+  s.players[1].body[0x2b]&=(uint8_t)~4;
+  s.players[1].body[2]=0x10; /* Native wall slide. */
+  s.players[1].input=0;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  uint16_t toward_wall=(s.players[1].input&SNES_PAD_RIGHT) ?
+      SNES_PAD_RIGHT : SNES_PAD_LEFT;
+  uint16_t away=toward_wall==SNES_PAD_RIGHT ? SNES_PAD_LEFT : SNES_PAD_RIGHT;
+  check((s.players[1].input&(SNES_PAD_B|toward_wall))==
+        (SNES_PAD_B|toward_wall),
+      "wall recovery: first actionable slide frame kicks immediately");
+
+  /* The native kick leaves slide. Unlike the old one-frame B tap,
+   * this controller now holds B during the wall-kick ascent for full
+   * height while steering briefly away, then back to the wall. */
+  s.players[1].body[2]=6;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(toward_wall,0);s=MmxCoopGetState();
+  check((s.players[1].input&(away|SNES_PAD_B))==(away|SNES_PAD_B),
+      "wall recovery: push away with B held for a higher kick");
+  MmxCoopPoll(toward_wall,0);s=MmxCoopGetState();
+  check((s.players[1].input&(away|SNES_PAD_B))==(away|SNES_PAD_B),
+      "wall recovery: continue jump-hold through initial ascent");
+
+  /* EARLY wall reattachment interrupts the 4+9-frame steering timer.
+   * B is held from the first kick, so the first re-slide frame releases
+   * it and the NEXT frame supplies a fresh B press edge. Two frames is
+   * the earliest possible response for the game's edge-triggered input. */
+  s.players[1].body[2]=0x10;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(away,0);s=MmxCoopGetState();
+  check(!(s.players[1].input&SNES_PAD_B) && (s.players[1].input&toward_wall),
+      "wall recovery: re-slide releases B immediately even during hold");
+  MmxCoopPoll(away,0);s=MmxCoopGetState();
+  check((s.players[1].input&(SNES_PAD_B|toward_wall))==
+        (SNES_PAD_B|toward_wall),
+      "wall recovery: second kick on first rearmed slide frame");
+  /* A held B during kick #2 is not a THIRD press. Count only fresh
+   * rising edges, then ensure B eventually releases with no new kick. */
+  bool last_b=true,saw_release=false,third_press=false;
+  for (unsigned tick=0;tick<4+9+24;++tick) {
+    MmxCoopPoll(away,0);s=MmxCoopGetState();
+    bool b=(s.players[1].input&SNES_PAD_B)!=0;
+    if (b && !last_b) third_press=true;
+    if (!b) saw_release=true;
+    last_b=b;
+  }
+  check(saw_release && !third_press,
+      "wall recovery: 2 native B edges only, despite full-height held second kick");
+
+  /* Ground after TWO jumps must release high-priority wall state in the
+   * same tick; once landed the CPU may follow independently again.
+   * Place X inside the 40px dead zone so this specifically checks that
+   * recovery does not fire an extra kick, not ordinary obstacle behavior. */
+  s.players[0].body[5]=s.players[1].body[5];
+  s.players[0].body[6]=s.players[1].body[6];
+  s.players[1].body[0x2b]|=4;
+  s.players[1].body[2]=0;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check(!(s.players[1].input&SNES_PAD_B),
+      "wall recovery: landing immediately cancels remaining recovery input");
+
+  /* Test early landing after just ONE jump: do not force jump number two.
+   * A genuinely new wall-slide after landing may then begin a new cycle. */
+  MmxCoopSetCpuCompanion(false);
+  MmxCoopSetCpuCompanion(true);
+  s=MmxCoopGetState();
+  s.players[1].body[0x2b]&=(uint8_t)~4;
+  s.players[1].body[2]=0x10;
+  s.players[1].input=0;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check((s.players[1].input&SNES_PAD_B)!=0,
+      "wall recovery: one kick occurs before early landing");
+  s.players[0].body[5]=s.players[1].body[5];
+  s.players[0].body[6]=s.players[1].body[6];
+  s.players[1].body[0x2b]|=4;
+  s.players[1].body[2]=0;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check(!(s.players[1].input&SNES_PAD_B),
+      "wall recovery: early landing skips the second kick");
+  s.players[1].body[0x2b]&=(uint8_t)~4;
+  s.players[1].body[2]=0x10;
+  s.players[1].input=0;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check((s.players[1].input&SNES_PAD_B)!=0,
+      "wall recovery: fresh wall slide after landing permits a new first kick");
+  MmxCoopSetCpuCompanion(false);
+  MmxCoopSetCpuCompanion(true);
+  s.players[1].body[0x2b]|=4;
+  s.players[1].body[2]=0;
+  MmxCoopSetState(&s);
+
+  /* High-elevation goal is different from an accidental wall slide.
+   * A 272px Highway support column requires several native wall kicks
+   * without landing. Simulate a safe grounded X far above the follower,
+   * then repeatedly leave/re-enter the native slide action. */
+  MmxCoopSetCpuCompanion(false);
+  MmxCoopSetCpuCompanion(true);
+  s=MmxCoopGetState();
+  unsigned cpu_y=coop_y(&s.players[1]);
+  unsigned cpu_x=coop_x(&s.players[1]);
+  unsigned goal_y=cpu_y>=192 ? cpu_y-160 : 0;
+  s.players[0].body[5]=(uint8_t)(cpu_x+44);
+  s.players[0].body[6]=(uint8_t)((cpu_x+44)>>8);
+  s.players[0].body[8]=(uint8_t)goal_y;
+  s.players[0].body[9]=(uint8_t)(goal_y>>8);
+  s.players[0].body[0x2b]|=4;
+  s.players[1].body[0x2b]&=(uint8_t)~4;
+  s.players[1].body[2]=0x10;
+  s.players[1].input=0;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  uint16_t wall_dir_input=(s.players[1].input&SNES_PAD_RIGHT)?
+      SNES_PAD_RIGHT:SNES_PAD_LEFT;
+  check((s.players[1].input&SNES_PAD_B)!=0,
+      "tall climb: first native wall kick fires as soon as slide is available");
+  for (unsigned n=2;n<=8;++n) {
+    s.players[1].body[2]=6;
+    /* A real native wall kick must physically ASCEND before its apex.
+     * Simulate the upward change in Y; B stays held for native height. */
+    unsigned rising_y=coop_y(&s.players[1])-12;
+    s.players[1].body[8]=(uint8_t)rising_y;
+    s.players[1].body[9]=(uint8_t)(rising_y>>8);
+    MmxCoopSetState(&s);
+    MmxCoopPoll(0,0);s=MmxCoopGetState();
+    check((s.players[1].input&(wall_dir_input|SNES_PAD_B))==
+          (wall_dir_input|SNES_PAD_B),
+        "tall climb: hold B while ascending and steer into wall");
+    /* Native Y levels out at the apex. Pre-release B BEFORE the next
+     * slide rather than waste its first actionable frame on release. */
+    MmxCoopPoll(0,0);s=MmxCoopGetState();
+    check(!(s.players[1].input&SNES_PAD_B),
+        "tall climb: release B at measured apex without a slide delay");
+    s.players[1].body[2]=0x10;
+    MmxCoopSetState(&s);
+    MmxCoopPoll(0,0);s=MmxCoopGetState();
+    check((s.players[1].input&(SNES_PAD_B|wall_dir_input))==
+          (SNES_PAD_B|wall_dir_input),
+        "tall climb: kick immediately on first reattachment slide frame");
+  }
+  s.players[1].body[2]=6;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  s.players[1].body[2]=0x10;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check(!(s.players[1].input&SNES_PAD_B),
+      "tall climb: eight-kick cap prevents an unlimited loop in midair");
+  /* Solid ground overrides even a partially completed high-wall climb. */
+  s.players[1].body[0x2b]|=4;
+  s.players[1].body[2]=0;
+  s.players[0].body[5]=s.players[1].body[5];
+  s.players[0].body[6]=s.players[1].body[6];
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check(!(s.players[1].input&SNES_PAD_B),
+      "tall climb: confirmed landing immediately cancels any remaining kicks");
+  MmxCoopSetCpuCompanion(false);
+  MmxCoopSetCpuCompanion(true);
+
+  /* The human can run toward a companion who is already AHEAD: do not
+   * force the CPU to turn away from an approaching obstacle. A stationary
+   * companion with valid ground should also attempt its own jump after
+   * repeated left/right movement inputs fail to make progress. */
+  MmxCoopSetCpuCompanion(false);
+  MmxCoopSetCpuCompanion(true);
+  s=MmxCoopGetState();
+  s.players[1].body[2]=0;s.players[1].body[0x2b]|=4;
+  unsigned fx=coop_x(&s.players[1]),fy=coop_y(&s.players[1]);
+  int route=(fx>110)?1:-1; /* Keep the human inside the stage origin. */
+  unsigned lx=(unsigned)((int)fx-route*80);
+  s.players[0].body[5]=(uint8_t)lx;
+  s.players[0].body[6]=(uint8_t)(lx>>8);
+  s.players[0].body[8]=(uint8_t)fy;
+  s.players[0].body[9]=(uint8_t)(fy>>8);
+  MmxCoopSetState(&s);
+  unsigned toward=route>0?SNES_PAD_RIGHT:SNES_PAD_LEFT;
+  MmxCoopPoll((uint16_t)toward,0);
+  s=MmxCoopGetState();
+  check(s.players[1].input&toward,
+      "CPU follows human travel intent when companion is already ahead");
+  bool jumped=false;
+  for(unsigned ticks=0;ticks<24;++ticks) {
+    /* Intentionally hold the snapshot motion still to simulate a solid,
+     * unrepresented object stopping the companion's horizontal progress. */
+    MmxCoopPoll((uint16_t)toward,0);
+    s=MmxCoopGetState();
+    if(s.players[1].input&SNES_PAD_B) {jumped=true;break;}
+  }
+  check(jumped,"stationary CPU eventually attempts an independent jump");
+  MmxCoopSetCpuCompanion(false);
+  MmxCoopSetCpuCompanion(true);
+
+  /* Host-only L2 press edges switch the physical P1 pad between actors.
+   * Real L2 doesn't have a SNES bit, so this test injects analog threshold
+   * state separately, and regular weapon/menu buttons remain untouched. */
+  MmxCoopSetSwitchTrigger(false);
+  MmxCoopPoll(0,0);
+  MmxCoopSetCpuCompanion(true);
+  MmxCoopSetSwitchTrigger(true);
+  MmxCoopPoll(0,0);
+  /* A held analog trigger must switch exactly once. */
+  MmxCoopPoll(0,0);
+  MmxCoopPoll(0,0);
+  MmxCoopPoll(SNES_PAD_RIGHT,0);
+  s=MmxCoopGetState();
+  check(s.players[1].input==SNES_PAD_RIGHT,
+      "single L2 press routes P1 controller to Zero without retriggering");
+  MmxCoopSetSwitchTrigger(false);
+  MmxCoopPoll(0,0);
+  MmxCoopSetSwitchTrigger(true);
+  MmxCoopPoll(0,0);
+  MmxCoopPoll(SNES_PAD_LEFT,0);
+  s=MmxCoopGetState();
+  check(s.players[0].input==SNES_PAD_LEFT,
+      "second L2 press routes P1 controller back to X");
+
+  /* A DEAD controlled seat must never strand the DualSense. Recover
+   * immediately, with no button chord or L2 action, while retaining the
+   * original native co-op death/respawn state for the fallen character. */
+  MmxCoopSetSwitchTrigger(false);
+  s.players[0].status=MMX_COOP_FALLEN;
+  s.players[0].body[0x27]&=128;
+  s.players[1].status=MMX_COOP_ALIVE;
+  s.players[1].body[0x27]|=1;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(SNES_PAD_RIGHT,0);s=MmxCoopGetState();
+  check(s.players[1].input==SNES_PAD_RIGHT,
+      "controlled X fallen: DualSense immediately follows living Zero");
+
+  /* Restore X, then let the CPU-controlled Zero fall. This must return
+   * P1 to X (the actual user-reported lockout). */
+  s.players[0].status=MMX_COOP_ALIVE;
+  s.players[0].body[0x27]|=1;
+  s.players[1].status=MMX_COOP_FALLEN;
+  s.players[1].body[0x27]&=128;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(SNES_PAD_LEFT,0);s=MmxCoopGetState();
+  check(s.players[0].input==SNES_PAD_LEFT,
+      "controlled Zero fallen: DualSense immediately returns to living X");
+
+  /* X3 Zero's real buster charges by HOLDING Y. Do not waste it on
+   * taps every twelve ticks while X is being followed. Release only
+   * with a valid enemy in front and a charge-capable idle weapon. */
+  s.players[1].status=MMX_COOP_ALIVE;
+  s.players[1].body[0x27]|=1;
+  s.players[1].zero.modern.enabled=0;
+  s.players[1].zero.charge=0;
+  s.players[1].zero.burst=0;
+  s.players[1].zero.combo=0;
+  s.players[1].zero.slash=0;
+  MmxCoopSetState(&s);
+  g_ram[enemy]=0;
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check((s.players[1].input&SNES_PAD_Y)!=0,
+      "X3 CPU Zero holds Y to charge his powerful native buster");
+  s.players[0].body[5]=(uint8_t)(coop_x(&s.players[1])+80);
+  s.players[0].body[6]=(uint8_t)((coop_x(&s.players[1])+80)>>8);
+  s.players[1].zero.charge=141;
+  MmxCoopSetState(&s);
+  unsigned foe_x=coop_x(&s.players[1])+48,foe_y=coop_y(&s.players[1]);
+  g_ram[enemy]=1;g_ram[enemy+14]=1;g_ram[enemy+0x27]=15;
+  g_ram[enemy+5]=(uint8_t)foe_x;g_ram[enemy+6]=(uint8_t)(foe_x>>8);
+  g_ram[enemy+8]=(uint8_t)foe_y;g_ram[enemy+9]=(uint8_t)(foe_y>>8);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check(!(s.players[1].input&SNES_PAD_Y),
+      "X3 CPU Zero releases fully charged buster toward a real enemy");
+  g_ram[enemy]=0;
+  MmxCoopSetSwitchTrigger(false);
+  MmxCoopSetCpuCompanion(false);
+  MmxCoopPoll(0,SNES_PAD_LEFT);s=MmxCoopGetState();
+  check(s.players[1].input==SNES_PAD_LEFT,
+      "human mode restores the real second controller");
+  MmxCoopDisable();
+  puts("MMX CPU COMPANION BASIC INPUT CHECKS PASSED");
+}
 static void coop_checks(const char *assets, const char *fixture,
                         uint8_t *start, uint8_t *expected, uint8_t *actual, size_t cap) {
   check(assets && fixture, "co-op check requires private source assets and a grounded fixture");
@@ -1101,6 +1505,7 @@ static void coop_checks(const char *assets, const char *fixture,
   if(getenv("MMX_COOP_STAGE_FIXTURE")) {coop_stage_entry_checks(getenv("MMX_COOP_STAGE_FIXTURE"));return;}
   if(getenv("MMX_COOP_PLATFORM_CAPTURE")) {coop_platform_checks(fixture,getenv("MMX_COOP_PLATFORM_CAPTURE"));return;}
   if(getenv("MMX_COOP_NATURAL_DEATH")) {coop_natural_death_checks(fixture);return;}
+  if(getenv("MMX_COOP_CPU_TEST")) {coop_cpu_companion_checks(fixture);return;}
   if(getenv("MMX_COOP_KEYBOARD_TEST")) {coop_keyboard_checks(fixture);return;}
   if(getenv("MMX_COOP_BOSS_SURVIVOR_FIXTURE")) {coop_boss_survivor_checks(getenv("MMX_COOP_BOSS_SURVIVOR_FIXTURE"));return;}
   if(getenv("MMX_COOP_CAPSULE_FULL_FIXTURE")) {coop_capsule_full_checks(getenv("MMX_COOP_CAPSULE_FULL_FIXTURE"));return;}

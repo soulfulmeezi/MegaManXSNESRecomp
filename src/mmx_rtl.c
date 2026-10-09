@@ -23,6 +23,7 @@
 #include <stdlib.h>
 #include "fiber_compat.h"   /* Win32 Fibers on Windows, ucontext shim on POSIX */
 #include "apu_frame_clock.h"
+#include "desktop/sdl_compat.h" /* Physical L2 trigger, not part of SNES pad */
 
 #ifndef MMX_VARIANT_JP
 #define MMX_VARIANT_JP 0
@@ -82,6 +83,41 @@ uint8_t g_mmx_task_slot_x;
 uint8_t g_mmx_task_yield_countdown;
 
 static int mmx_rtl_diag_enabled(void);
+
+/* Read the analog L2 from the first open gamepad. CPU Companion uses it
+ * as a host-only character swap, without hijacking the SNES L or Select
+ * buttons. The input host already opens and polls the user's controller.
+ * SDL's trigger range is 0..32767 for standard mapped gamepads. Apply
+ * hysteresis so holding L2 doesn't chatter near the threshold. */
+static bool mmx_local_l2_swap_held(void) {
+  static bool held;
+  int axis=0;
+#if SNESRECOMP_SDL3
+  int count=0;
+  SDL_JoystickID *ids=SDL_GetGamepads(&count);
+  for (int i=0; ids && i<count; ++i) {
+    SDL_Gamepad *pad=SDL_GetGamepadFromID(ids[i]);
+    if (pad) {
+      axis=(int)SDL_GetGamepadAxis(pad,SDL_GAMEPAD_AXIS_LEFT_TRIGGER);
+      break;
+    }
+  }
+  SDL_free(ids);
+#else
+  for (int i=0;i<SDL_NumJoysticks();++i) {
+    SDL_JoystickID id=SDL_JoystickGetDeviceInstanceID(i);
+    SDL_GameController *pad=SDL_GameControllerFromInstanceID(id);
+    if (pad) {
+      axis=(int)SDL_GameControllerGetAxis(pad,SDL_CONTROLLER_AXIS_TRIGGERLEFT);
+      break;
+    }
+  }
+#endif
+  if (axis>=16000) held=true;
+  else if (axis<=12000) held=false;
+  return held;
+}
+
 
 /* Dispatch a cooperative task by its 16-bit entry PC (from RAM $0032+slot).
  * The optional HLE scheduler uses the same authoritative runtime dispatch as
@@ -982,8 +1018,10 @@ void RunOneFrameOfGame(void) {
   }
   cpu_trace_px_breadcrumb(&g_cpu, 0x2002, "before_Internal");
   MmxKncBugfixTick(g_ram,RtlGetPadState(0),RtlGetPadState(1));
-  if (MmxCoopEnabled()) MmxCoopPoll(RtlGetPadState(0), RtlGetPadState(1));
-  else if (MmxZeroSwapTick(g_ram)) return;
+  if (MmxCoopEnabled()) {
+    MmxCoopSetSwitchTrigger(mmx_local_l2_swap_held());
+    MmxCoopPoll(RtlGetPadState(0), RtlGetPadState(1));
+  } else if (MmxZeroSwapTick(g_ram)) return;
   if (MmxCoopEnabled() ? MmxCoopFrameTick(g_ram) : MmxWeaponsFrameTick(g_ram)) {
     MmxCoopDiagnosticFrame(g_ram);return;
   }

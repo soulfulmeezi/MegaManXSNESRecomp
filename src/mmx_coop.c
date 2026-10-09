@@ -32,10 +32,48 @@ extern int snes_frame_counter;
 
 static MmxCoopState state = {.players = {{.character = MMX_COOP_X}, {.character = MMX_COOP_ZERO}}};
 static bool enabled;
+static bool cpu_companion; /* Opt-in local mode; never stored in guest save state. */
+static uint8_t cpu_jump_hold_frames, cpu_jump_cooldown_frames;
+static uint8_t cpu_cliff_dash_frames;
+static bool cpu_jump_seen_airborne;
+/* Host-only high-priority recovery: from first native wall slide until
+ * verified landing; no normal follow inputs may interrupt this sequence. */
+static uint8_t cpu_wall_recovery_phase, cpu_wall_recovery_jumps;
+static uint8_t cpu_wall_recovery_ticks;
+/* A new native wall-slide must follow a real departure from the previous
+ * slide before the next kick is allowed. Prevents double-pressing B while
+ * the original slide action is still latched in a snapshot. */
+static bool cpu_wall_recovery_left_slide;
+/* Track buffered pre-slide wall-kicks separately from confirmed native kicks,
+ * so an ignored early B press never consumes one of the two climb attempts. */
+static bool cpu_wall_buffer_pending, cpu_wall_buffer_attempted;
+static uint8_t cpu_wall_jump_hold_frames;
+/* Tall ascents can require many successive native wall-kicks. Ordinary
+ * accidental slides keep the original two-kick safety limit. */
+static bool cpu_tall_wall_climb;
+static uint16_t cpu_tall_wall_start_y, cpu_tall_wall_best_y;
+static uint16_t cpu_tall_wall_kick_x, cpu_tall_wall_kick_y;
+/* Count wall-jump opportunities from native engine state, not a timer.
+ * Once the kick's real upward arc peaks, release B proactively so the
+ * first wall-slide frame can receive a fresh B edge with no lost frame. */
+static uint8_t cpu_tall_wall_trace_ticks;
+static bool cpu_wall_y_valid;
+static uint16_t cpu_wall_last_y;
+static uint8_t cpu_human_seat, cpu_swap_trigger_down, cpu_rescue_cooldown;
+static bool cpu_l2_trigger_held;
+static uint8_t cpu_stall_ticks;
+static uint8_t cpu_zero_melee_cooldown;
+static bool cpu_zero_dash_was_active;
+static bool cpu_wall_escape_reported;
+static uint16_t cpu_last_x;
+static int8_t cpu_jump_direction, cpu_wall_direction, cpu_stall_direction;
 static unsigned starting_character;
 _Static_assert(sizeof(MmxCoopPlayer) == 2276, "Co-op player save ABI");
 _Static_assert(sizeof(MmxCoopState) == 4664, "Co-op save ABI");
 static bool join_tick(uint8_t *r);
+static void place_other(uint8_t *r,uint16_t x,uint16_t y,bool preserve);
+static bool floor_below(const uint8_t *r,const uint8_t *b);
+static void cpu_companion_rescue(uint8_t *r);
 /* Registers the item routine passed into $84:AB81/AB56; see platform_hook. */
 static struct {bool valid;uint16_t d,s,a,x,y;uint8_t p,db;} platform_entry;
 /* --coop-trace: observation only; see mmx_coop_trace.h. */
@@ -315,9 +353,35 @@ bool MmxCoopTransitionActive(void) {
 }
 
 bool MmxCoopEnabled(void) { return enabled; }
+/* No native shared-screen catch-up beam while the locally controlled
+ * companion is attempting parkour. Online/human co-op retains stock scene
+ * handoffs. Scripted boss/capsule/door handoffs remain separate. */
+static bool cpu_traversal_active(void) {
+  if (!enabled || !cpu_companion) return false;
+#if SNESRECOMP_NET
+  if (snes_netplay_active()) return false;
+#endif
+  return true;
+}
 static void shot_ghost_reset(void);
 static void lift_reset(void);
+static void cpu_companion_reset_motion(void) {
+  cpu_jump_hold_frames=cpu_jump_cooldown_frames=cpu_cliff_dash_frames=0;
+  cpu_jump_seen_airborne=false;
+  cpu_wall_recovery_phase=cpu_wall_recovery_jumps=cpu_wall_recovery_ticks=0;
+  cpu_wall_recovery_left_slide=cpu_wall_buffer_pending=cpu_wall_buffer_attempted=false;
+  cpu_wall_jump_hold_frames=0;cpu_wall_y_valid=false;cpu_wall_last_y=0;
+  cpu_tall_wall_climb=false;cpu_tall_wall_start_y=cpu_tall_wall_best_y=0;
+  cpu_tall_wall_kick_x=cpu_tall_wall_kick_y=0;
+  cpu_tall_wall_trace_ticks=0;
+  cpu_jump_direction=cpu_wall_direction=0;
+  cpu_stall_ticks=0;cpu_last_x=0;cpu_stall_direction=0;
+  cpu_zero_melee_cooldown=0;cpu_zero_dash_was_active=false;
+  cpu_wall_escape_reported=false;
+}
 void MmxCoopReset(void) {
+  cpu_companion_reset_motion();cpu_human_seat=cpu_swap_trigger_down=cpu_rescue_cooldown=0;
+  cpu_l2_trigger_held=false;
   platform_entry.valid=false;lift_reset();shot_ghost_reset();
   MmxCoopViewsResetWorld();
   MmxWeaponsCameraQuery(enabled?weapon_view:NULL);
@@ -335,7 +399,15 @@ bool MmxCoopEnable(unsigned character) {
   if (character > MMX_COOP_ZERO || !MmxZeroEnabled()) return false;
   starting_character = character; enabled = true; MmxCoopReset(); return true;
 }
-void MmxCoopDisable(void) { enabled = false; starting_character = 0; MmxCoopReset(); }
+void MmxCoopDisable(void) { enabled = false; cpu_companion = false; starting_character = 0; MmxCoopReset(); }
+void MmxCoopSetCpuCompanion(bool active) {
+  if (cpu_companion!=active) {
+    cpu_companion_reset_motion();
+    cpu_human_seat=cpu_swap_trigger_down=cpu_rescue_cooldown=0;
+    cpu_l2_trigger_held=false;
+  }
+  cpu_companion=active;
+}
 MmxCoopState MmxCoopGetState(void) { return state; }
 bool MmxCoopValidState(const MmxCoopState *s) {
   if (!s || s->initialized > 1 || s->current > 1 || s->controller_pass > 2 ||
@@ -556,6 +628,9 @@ bool MmxCoopFrameTick(uint8_t *r) {
   if(refill_paused(r)) return false;
   if (scene_tick(r)) return true;
   if (!state.scene_owner && join_tick(r)) return true;
+  /* In CPU mode, the last-chance pit safety runs only near native death;
+   * it must never mask ordinary wall-slide navigation. */
+  if (cpu_traversal_active()) cpu_companion_rescue(r);
   if (r[0x1f10]>=6) return false;
   unsigned phases[2]={0,0};
   for (unsigned seat=0;seat<2;++seat) if (state.players[seat].status==MMX_COOP_ALIVE &&
@@ -574,9 +649,907 @@ bool MmxCoopFrameTick(uint8_t *r) {
   if (frozen) r[0xb9d]=r[0xba0]=0;
   return frozen;
 }
+/* Offline companion controls are the 12-bit SNES pad masks. Use explicit
+ * constants here: this module does not include the host UI's SNES_PAD_* macros. */
+enum {
+  MMX_CPU_JUMP = 1u << 0, MMX_CPU_FIRE = 1u << 1,
+  MMX_CPU_LEFT = 1u << 6, MMX_CPU_RIGHT = 1u << 7,
+  MMX_CPU_DASH = 1u << 8
+};
+/* X3 Zero is charge-capable: his own MmxZeroPlayerTick increments charge
+ * while Y is HELD and fires on release. Modern Zero replaces that buster
+ * with a direct saber and has his own shorter melee attack cadence.
+ * Keep this CPU-only selection outside the traversal paths: wall/jump
+ * returns otherwise bypass attack decisions on nearly every busy tick. */
+enum {
+  MMX_CPU_WALL_IDLE, MMX_CPU_WALL_SEEK, MMX_CPU_WALL_PUSH,
+  MMX_CPU_WALL_RETURN, MMX_CPU_WALL_FINISHED
+};
+/* Both X and Zero stand about 16 pixels above their feet. Probe several pixels
+ * below the feet so a small step down does not register as a bottomless pit.
+ * A probe is terrain only; moving platforms and scripted geometry need a
+ * separate later pass. The game's actual collision map is queried live. */
+static bool cpu_companion_supported(const uint8_t *ram, int x, int feet) {
+  for (int depth=0; depth<=20; depth+=4)
+    if (MmxWeaponsTerrainSolid(ram,x,feet+depth,true,NULL)) return true;
+  return false;
+}
+/* Short, directional ground-level rays from the follower's OWN feet.
+ * Checking both 20 and 28 pixels ahead lets Zero notice an edge before
+ * his sprite crosses it. Never sample P1's position or jump input here. */
+static bool cpu_companion_ground_missing(const uint8_t *ram,int x,int feet,int dir) {
+  if (!ram || !dir) return false;
+  bool here=cpu_companion_supported(ram,x,feet);
+  bool ahead20=cpu_companion_supported(ram,x+dir*20,feet);
+  bool ahead28=cpu_companion_supported(ram,x+dir*28,feet);
+  /* Instrument the real per-tick sensor even when it finds NO edge.
+   * This proves that the AI checks terrain before the walking decision. */
+  if (getenv("MMX_CPU_TRACE")) {
+    static int last_trace=-1000;
+    if (snes_frame_counter-last_trace>=120) {
+      fprintf(stderr,"[cpu-sense] x=%d feet=%d dir=%d ground=%d ahead20=%d ahead28=%d\n",
+              x,feet,dir,(int)here,(int)ahead20,(int)ahead28);
+      last_trace=snes_frame_counter;
+    }
+  }
+  return here && (!ahead20 || !ahead28);
+}
+/* A pit jump needs a plausible *landing*, not just a nearby drop.
+ * Sample only solid walkable terrain near the follower's current foot level.
+ * This is a conservative short-jump planner, not a proof of a clear arc or a
+ * replacement for native moving-platform contacts. */
+static bool cpu_companion_walkable(unsigned tile) {
+  return tile==0x13 || (tile>=1 && tile<=12) ||
+         (tile>=0x34 && tile<=0x38) ||
+         (tile>=0x3b && tile<=0x3d);
+}
+static bool cpu_companion_landing(const uint8_t *ram,int x,int feet) {
+  for (int delta=-20;delta<=24;delta+=4) {
+    int py=feet+delta;
+    unsigned tile=MmxWeaponsTerrainClass(ram,x,py);
+    if (!cpu_companion_walkable(tile)) continue;
+    int surface=0;
+    if (MmxWeaponsTerrainSolid(ram,x,py,true,&surface) &&
+        surface>=feet-20 && surface<=feet+24) return true;
+  }
+  return false;
+}
+/* Look ahead for a safe floor at a different elevation, not only an
+ * equal-height landing inside the first 96 pixels. Highway repeatedly
+ * alternates medium gaps and higher roofs: the old fixed 40..96px and
+ * +/-20px check returned false at a real edge (ground=1 ahead28=0), then
+ * the WAIT decision suppressed every jump forever.
+ *
+ * Native jump physics and wall-slide recovery remain responsible for the
+ * actual crossing. A candidate must be walkable terrain, have head space
+ * above it, and have solid support slightly farther into the landing.
+ * Distances beyond 176px are NOT treated as safe native jumps. */
+static bool cpu_companion_gap_reachable(const uint8_t *ram,int x,int feet,
+                                         int direction,int *distance_out,
+                                         int *rise_out) {
+  if (!ram || !direction) return false;
+  for (int d=40;d<=176;d+=8) {
+    int landing_x=x+direction*d;
+    for (int rise=0;rise<=88;rise+=8) {
+      int py=feet-rise,surface=0;
+      unsigned type=MmxWeaponsTerrainClass(ram,landing_x,py);
+      if (!cpu_companion_walkable(type) ||
+          !MmxWeaponsTerrainSolid(ram,landing_x,py,true,&surface) ||
+          surface<feet-88 || surface>feet+24 ||
+          MmxWeaponsTerrainSolid(ram,landing_x,surface-16,true,NULL) ||
+          MmxWeaponsTerrainSolid(ram,landing_x,surface-32,true,NULL) ||
+          !cpu_companion_supported(ram,landing_x+direction*8,surface+2))
+        continue;
+      /* Do not infer a high unreachable roof across a full screen as a
+       * safe landing for a single undashed jump. */
+      if (d>144 && feet-surface>40) continue;
+      if (distance_out) *distance_out=d;
+      if (rise_out) *rise_out=feet-surface;
+      return true;
+    }
+    /* Some safe short ledges are slightly below the starting ground. */
+    if (d<=112 && cpu_companion_landing(ram,landing_x,feet) &&
+        !MmxWeaponsTerrainSolid(ram,landing_x,feet-28,false,NULL)) {
+      if (distance_out) *distance_out=d;
+      if (rise_out) *rise_out=0;
+      return true;
+    }
+  }
+  return false;
+}
+/* At a descending junction, X may be on verified LOWER terrain.
+ * A roof-level-only search previously returned no landing and WAIT locked
+ * the CPU at the lip, even with X standing safely on the tier below.
+ * Match the lower candidate's surface to X's grounded foot elevation, and
+ * require support and free headroom on that candidate; never drop toward
+ * an X who is still falling or to an unseen void.
+ * A nearby lower floor is a step-off (DROP), a distant one needs a jump. */
+static bool cpu_companion_lower_landing(const uint8_t *ram,
+                                        int x,int feet,int dir,int leader_feet,
+                                        int *distance_out,int *drop_out) {
+  if (!ram || !dir) return false;
+  for (int d=32;d<=176;d+=8) {
+    int sx=x+dir*d;
+    for (int lower=24;lower<=112;lower+=8) {
+      int floor=feet+lower,surface=0;
+      if (!cpu_companion_walkable(MmxWeaponsTerrainClass(ram,sx,floor)) ||
+          !MmxWeaponsTerrainSolid(ram,sx,floor,true,&surface) ||
+          surface<feet+20 || surface>feet+112 ||
+          abs(surface-leader_feet)>24 ||
+          (d>128 && surface-feet>72) ||
+          !cpu_companion_supported(ram,sx+dir*8,surface+2) ||
+          MmxWeaponsTerrainSolid(ram,sx,surface-20,true,NULL) ||
+          MmxWeaponsTerrainSolid(ram,sx,surface-32,true,NULL))
+        continue;
+      if (distance_out) *distance_out=d;
+      if (drop_out) *drop_out=surface-feet;
+      return true;
+    }
+  }
+  return false;
+}
+/* A normal-height landing check deliberately rejects elevated platforms.
+ * A gap ending at a higher vertical wall is different: Zero may leap to the
+ * wall, latch onto its native slide and climb with successive wall kicks.
+ * Require BOTH a solid wall in front of the void and walkable, open terrain
+ * at the top of it. Scan only short local distances, not across whole maps;
+ * this is an attempt plan, not a guarantee the jump trajectory succeeds. */
+static bool cpu_companion_raised_wall(const uint8_t *ram,int x,int feet,
+                                      int direction,int *distance_out) {
+  if (!ram || !direction) return false;
+  for (int distance=24;distance<=192;distance+=4) {
+    int wx=x+direction*distance;
+    if (!MmxWeaponsTerrainSolid(ram,wx,feet-16,false,NULL) ||
+        !MmxWeaponsTerrainSolid(ram,wx,feet-40,false,NULL) ||
+        MmxWeaponsTerrainSolid(ram,wx-direction*12,feet-24,false,NULL))
+      continue;
+    /* Tall Highway support columns are roughly 170+ game pixels high.
+     * A 144px ceiling on wall detection used to make Zero freeze at their
+     * bases even though native repeated wall kicks can reach their tops. */
+    for (int rise=32;rise<=256;rise+=4) {
+      int surface=0;
+      int sample=feet-rise;
+      if (!cpu_companion_walkable(MmxWeaponsTerrainClass(ram,wx,sample)) ||
+          !MmxWeaponsTerrainSolid(ram,wx,sample,true,&surface) ||
+          surface>feet-32 || surface<feet-256 ||
+          MmxWeaponsTerrainSolid(ram,wx,surface-20,true,NULL))
+        continue;
+      int landing_x=wx+direction*20;
+      if (!cpu_companion_walkable(MmxWeaponsTerrainClass(ram,landing_x,surface+4)) ||
+          !MmxWeaponsTerrainSolid(ram,landing_x,surface+4,true,NULL) ||
+          MmxWeaponsTerrainSolid(ram,landing_x,surface-24,true,NULL))
+        continue;
+      if (distance_out) *distance_out=distance;
+      return true;
+    }
+  }
+  return false;
+}
+/* On tall structures the top can be off-screen and outside a useful
+ * terrain scan. A solid vertical FACE across a short approach is still a
+ * wall-climb target if the leader is on its far, higher side. This does NOT
+ * copy the human's jump input: the wall and goal must both be present. */
+static int cpu_companion_wall_face(const uint8_t *ram,int x,int feet,int dir) {
+  if (!ram || !dir) return 0;
+  for (int d=12;d<=144;d+=4) {
+    int wx=x+dir*d;
+    if (MmxWeaponsTerrainSolid(ram,wx,feet-16,false,NULL) &&
+        MmxWeaponsTerrainSolid(ram,wx,feet-36,false,NULL) &&
+        !MmxWeaponsTerrainSolid(ram,wx-dir*12,feet-32,false,NULL))
+      return d;
+  }
+  return 0;
+}
+/* Detect a low or tall solid obstacle directly ahead at chest/leg height,
+ * without depending on P1 jumping or standing on a higher platform. Probe
+ * non-floor collision so a nearby slope or harmless decoration is not a wall. */
+static bool cpu_companion_obstacle_ahead(const uint8_t *ram,int x,int y,int direction) {
+  if (!direction) return false;
+  for (int look=14;look<=44;look+=6) {
+    int wall=x+direction*look;
+    if (MmxWeaponsTerrainSolid(ram,wall,y+5,false,NULL) ||
+        MmxWeaponsTerrainSolid(ram,wall,y-5,false,NULL) ||
+        MmxWeaponsTerrainSolid(ram,wall,y-14,false,NULL)) return true;
+  }
+  return false;
+}
+/* Enemy bodies occupy $0E68..$1227, one 64-byte record per slot.
+ * Choose a living target roughly level with the companion and in the current
+ * travel/facing direction. Avoid attacking every decorative/scripted object.
+ * Shots are brief Y-button taps rather than holding charge indefinitely.
+ * This is deliberately simple; visibility/obstacle-aware aiming is future work. */
+static bool cpu_companion_enemy_ahead(const uint8_t *r, int x, int y, int direction) {
+  if (!direction) return false;
+  for (unsigned d=0xe68;d<0x1228;d+=64) {
+    if (!r[d] || !r[d+14] || !(r[d+0x27]&127)) continue;
+    int dx=(int)word(r+d+5)-x, dy=(int)word(r+d+8)-y;
+    if (dx*direction>=12 && dx*direction<=152 && abs(dy)<=40) return true;
+  }
+  return false;
+}
+/* Modern saber reach is short; a regular buster can address enemies
+ * across far more of the shared screen. Use game object collision data
+ * instead of firing at any decorative/scripted sprite. */
+static bool cpu_companion_enemy_melee(const uint8_t *r,int x,int y,int dir) {
+  if (!r || !dir) return false;
+  for (unsigned d=0xe68;d<0x1228;d+=64) {
+    if (!r[d] || !r[d+14] || !(r[d+0x27]&127)) continue;
+    int dx=(int)word(r+d+5)-x,dy=(int)word(r+d+8)-y;
+    if (dx*dir>=0 && dx*dir<=56 && abs(dy)<=36) return true;
+  }
+  return false;
+}
+/* Highest-priority native motion is decided by cpu_companion_input() before
+ * this attack/dash postprocessor. Holding charge never overrides jump or
+ * wall-recovery directions, and any charged blast waits until a safe time
+ * when the native weapon can fire. */
+static uint16_t cpu_companion_zero_combat(const uint8_t *r,
+                                          const MmxCoopPlayer *f,
+                                          const MmxCoopPlayer *leader,
+                                          uint16_t input) {
+  if (!r || !f || !leader || f->character!=MMX_COOP_ZERO ||
+      f->status!=MMX_COOP_ALIVE || !(f->body[0x27]&127) ||
+      f->body[2]==12) return input;
+  int x=(int)word(f->body+5),y=(int)word(f->body+8);
+  int dx=(int)word(leader->body+5)-x;
+  int dir=(input&MMX_CPU_RIGHT) ? 1 : (input&MMX_CPU_LEFT) ? -1 :
+          (f->body[0x69]&64 ? 1 : -1);
+  bool target=cpu_companion_enemy_ahead(r,x,y,dir);
+  bool recovering=cpu_wall_recovery_phase!=MMX_CPU_WALL_IDLE;
+  if (f->zero.modern.enabled) {
+    /* Modern mode: direct saber, not a chargeable X3 buster. */
+    input&=(uint16_t)~MMX_CPU_FIRE;
+    if (cpu_zero_melee_cooldown) --cpu_zero_melee_cooldown;
+    if (!recovering && !cpu_zero_melee_cooldown &&
+        cpu_companion_enemy_melee(r,x,y,dir)) {
+      input|=MMX_CPU_FIRE;
+      cpu_zero_melee_cooldown=22;
+    }
+  } else {
+    /* X3 mode: build a powerful shot while running and jumping. Fire on
+     * release only if an enemy is in front AND the native player isn't
+     * busy with a wall-recovery or an earlier charged burst. With no
+     * target, hold a full ready charge rather than waste it at empty air. */
+    bool ready=f->zero.charge>=141;
+    bool busy=f->zero.burst || f->zero.slash || f->zero.combo ||
+              f->zero.swap_phase;
+    if (ready && target && !recovering && !busy &&
+        (f->input&MMX_CPU_FIRE)) {
+      /* Native X3 fires on RELEASE, not on a continuous unheld pad.
+       * If a charge release was suppressed by an action/animation, rearm
+       * Y for one tick so we can try again with a real input edge. */
+      input&=(uint16_t)~MMX_CPU_FIRE;
+      if (getenv("MMX_CPU_TRACE"))
+        fprintf(stderr,"[cpu-attack] Zero X3 charged release charge=%u x=%d y=%d\n",
+                (unsigned)f->zero.charge,x,y);
+    } else input|=MMX_CPU_FIRE;
+  }
+  /* Ground dash on VERIFIED clear terrain for fast catching up, including
+   * run-up toward a far raised climb. The native game decides the actual
+   * dash speed and animation; never force dash across an unverified gap
+   * or through a solid wall. Air dash is exclusively Modern mode and
+   * requires separate terrain-safe flight planning. */
+  bool safe_dash=false;
+  if ((f->body[0x2b]&4) && dx*dir>112 &&
+      (input&(dir>0?MMX_CPU_RIGHT:MMX_CPU_LEFT)) &&
+      cpu_companion_supported(r,x,y+16) &&
+      cpu_companion_supported(r,x+dir*28,y+16) &&
+      cpu_companion_supported(r,x+dir*48,y+16) &&
+      !cpu_companion_obstacle_ahead(r,x,y,dir) &&
+      !cpu_companion_enemy_melee(r,x,y,dir)) {
+    input|=MMX_CPU_DASH;
+    safe_dash=true;
+  }
+  if (safe_dash && !cpu_zero_dash_was_active && getenv("MMX_CPU_TRACE"))
+    fprintf(stderr,"[cpu-dash] Zero ground dash x=%d y=%d leader_dx=%d\n",
+            x,y,dx);
+  cpu_zero_dash_was_active=safe_dash;
+  return input;
+}
+/* A physical wall can be contacted during air action 6/8 before the
+ * native wall-slide action 0x10 appears. Prepare recovery by steering INTO
+ * the sensed face, with B released, so a later slide frame can start a
+ * real wall jump. Contact alone must not count toward the two kicks. */
+static int cpu_companion_air_wall_contact(const uint8_t *ram,int x,int y,
+                                           int prefer_dir) {
+  if (!ram) return 0;
+  int dirs[2]={prefer_dir?prefer_dir:1,prefer_dir?-prefer_dir:-1};
+  for (unsigned i=0;i<2;++i) {
+    int d=dirs[i];
+    /* 19px begins preparing the B-release before the sprite actually
+     * enters the wall's native slide state. Require two vertical samples
+     * to avoid treating isolated floor tiles as a climbable wall. */
+    if ((MmxWeaponsTerrainSolid(ram,x+d*11,y-4,false,NULL) ||
+         MmxWeaponsTerrainSolid(ram,x+d*15,y-4,false,NULL) ||
+         MmxWeaponsTerrainSolid(ram,x+d*19,y-4,false,NULL)) &&
+        (MmxWeaponsTerrainSolid(ram,x+d*11,y-16,false,NULL) ||
+         MmxWeaponsTerrainSolid(ram,x+d*15,y-16,false,NULL) ||
+         MmxWeaponsTerrainSolid(ram,x+d*19,y-16,false,NULL)))
+      return d;
+  }
+  return 0;
+}
+/* Native wall kicks can be buffered while approaching within ~7 px of
+ * a wall. Keep the buffered sensor STRICTER than the early 19 px steering
+ * probe, and attempt it only during visually confirmed descent.
+ * A rejected buffer releases B immediately, so the first native slide
+ * frame can still be used without wasting a recovery jump. */
+static bool cpu_companion_wall_jump_near(const uint8_t *ram,int x,int y,int dir) {
+  if (!ram || !dir) return false;
+  return (MmxWeaponsTerrainSolid(ram,x+dir*11,y-4,false,NULL) ||
+          MmxWeaponsTerrainSolid(ram,x+dir*15,y-4,false,NULL)) &&
+         (MmxWeaponsTerrainSolid(ram,x+dir*11,y-16,false,NULL) ||
+          MmxWeaponsTerrainSolid(ram,x+dir*15,y-16,false,NULL));
+}
+/* A failed wall ascent should retain a safe exit: scan REAL walkable
+ * terrain a short distance AWAY from the collision wall, BELOW Zero's
+ * airborne feet. This is never a synthetic teleport or an invented dash
+ * target. Solid headroom and additional support farther into the shelf
+ * are required before committing to an escape direction. */
+static int cpu_companion_wall_escape(const uint8_t *r,int x,int y,
+                                      int wall_dir,int *distance_out) {
+  if (!r || !wall_dir) return 0;
+  int away=-wall_dir,feet=y+16;
+  for (int d=24;d<=96;d+=8) {
+    int lx=x+away*d;
+    for (int drop=16;drop<=88;drop+=8) {
+      int sample=feet+drop,surface=0;
+      if (!cpu_companion_walkable(MmxWeaponsTerrainClass(r,lx,sample)) ||
+          !MmxWeaponsTerrainSolid(r,lx,sample,true,&surface) ||
+          surface<feet+12 || surface>feet+88 ||
+          MmxWeaponsTerrainSolid(r,lx,surface-20,true,NULL) ||
+          MmxWeaponsTerrainSolid(r,lx,surface-36,true,NULL) ||
+          !cpu_companion_supported(r,lx+away*8,surface+2))
+        continue;
+      if (distance_out) *distance_out=d;
+      return away;
+    }
+  }
+  return 0;
+}
+/* Native and buffered wall-kick input is highest priority.
+ * Ordinary recovery is limited to two kicks. A genuine upper-platform goal
+ * invokes a taller eight-kick climb instead, using *real* renewed native
+ * wall-slide states rather than timed synthetic teleports. The away-then-
+ * toward steering is shorter for tall climbs so Zero can reattach higher. */
+static uint16_t cpu_companion_wall_recovery(const MmxCoopPlayer *f,
+                                            bool wall_slide,bool near_wall,
+                                            bool descending,bool at_kick_apex) {
+  uint16_t toward=cpu_wall_direction>0 ? MMX_CPU_RIGHT : MMX_CPU_LEFT;
+  uint16_t away=cpu_wall_direction>0 ? MMX_CPU_LEFT : MMX_CPU_RIGHT;
+  unsigned max_kicks=cpu_tall_wall_climb ? 8u : 2u;
+  if (!wall_slide && cpu_wall_recovery_jumps)
+    cpu_wall_recovery_left_slide=true;
+  /* A fast wall climb must keep B through the upward motion, then have
+   * B UP before contact returns. Detect the native apex from successive
+   * Y samples rather than wasting 4+9 steering frames or guessing a
+   * fixed button hold. If the apex and slide happen on the same tick,
+   * releasing here restores a fresh B edge for the NEXT available tick. */
+  if (cpu_tall_wall_climb && at_kick_apex && cpu_wall_jump_hold_frames) {
+    cpu_wall_jump_hold_frames=0;
+    if (getenv("MMX_CPU_TRACE"))
+      fprintf(stderr,"[cpu-wall] apex B-release kick=%u x=%u y=%u frame=%d\n",
+              (unsigned)cpu_wall_recovery_jumps,
+              (unsigned)word(f->body+5),(unsigned)word(f->body+8),
+              snes_frame_counter);
+  }
+
+  /* A buffered press has to result in the game's wall-kick action ($12),
+   * or it was only a speculative press against nearby collision. Count
+   * only CONFIRMED wall-kicks, never the attempted pre-slide B edge. */
+  if (cpu_wall_buffer_pending) {
+    cpu_wall_buffer_pending=false;
+    if (f->body[2]==0x12) {
+      ++cpu_wall_recovery_jumps;
+      cpu_wall_recovery_left_slide=false;
+      cpu_wall_recovery_phase=MMX_CPU_WALL_PUSH;
+      if (cpu_tall_wall_climb) {
+        cpu_tall_wall_kick_x=(uint16_t)word(f->body+5);
+        cpu_tall_wall_kick_y=(uint16_t)word(f->body+8);
+        cpu_tall_wall_trace_ticks=0;
+      }
+      cpu_wall_recovery_ticks=cpu_tall_wall_climb ? 0 : 4;
+      cpu_wall_jump_hold_frames=cpu_tall_wall_climb ? 24 : 17;
+      if (getenv("MMX_CPU_TRACE"))
+        fprintf(stderr,"[cpu-wall] buffered kick confirmed %u/%u action=18 frame=%d\n",
+                (unsigned)cpu_wall_recovery_jumps,max_kicks,snes_frame_counter);
+      return (cpu_tall_wall_climb ? toward : away)|MMX_CPU_JUMP;
+    }
+    /* Native code did not accept the buffer. Release B to re-arm the
+     * next opportunity; do not spend a jump or wait for a cooldown. */
+    if (getenv("MMX_CPU_TRACE"))
+      fprintf(stderr,"[cpu-wall] buffered press not accepted action=%u frame=%d\n",
+              (unsigned)f->body[2],snes_frame_counter);
+    return toward;
+  }
+
+  /* If Zero is sliding and B is still held from the kick ascent, release
+   * it NOW; next frame is the earliest possible new B press edge. The
+   * original 4+9-frame steering timers never delay a reattached slide. */
+  if (wall_slide && (f->input&MMX_CPU_JUMP) &&
+      (cpu_wall_recovery_jumps==0 || cpu_wall_recovery_left_slide)) {
+    /* Native wall jumps are EDGE-triggered. This matters on the very
+     * FIRST contact too: an ordinary ground jump can still hold B when
+     * Zero enters action $10. Writing B again would not generate a new
+     * press and the old code counted a nonexistent kick. Release once,
+     * keep contact, then press on the next truly eligible native frame. */
+    cpu_wall_jump_hold_frames=0;
+    if (getenv("MMX_CPU_TRACE"))
+      fprintf(stderr,"[cpu-wall] rearm B before kick=%u action=%u frame=%d\n",
+              (unsigned)(cpu_wall_recovery_jumps+1),
+              (unsigned)f->body[2],snes_frame_counter);
+    return toward;
+  }
+  if (wall_slide && cpu_wall_recovery_jumps<max_kicks &&
+      (cpu_wall_recovery_jumps==0 || cpu_wall_recovery_left_slide)) {
+    ++cpu_wall_recovery_jumps;
+    cpu_wall_recovery_left_slide=false;
+    cpu_wall_recovery_phase=MMX_CPU_WALL_PUSH;
+    if (cpu_tall_wall_climb) {
+      cpu_tall_wall_kick_x=(uint16_t)word(f->body+5);
+      cpu_tall_wall_kick_y=(uint16_t)word(f->body+8);
+      cpu_tall_wall_trace_ticks=0;
+    }
+    /* A long climb needs to get back to its wall quickly. One kick-off
+     * frame creates a clean release, then hold INTO the same wall while
+     * still rising; otherwise Zero drifts away and lands back at the base. */
+    cpu_wall_recovery_ticks=cpu_tall_wall_climb ? 0 : 4;
+    /* Hold B for the whole native upward arc on a tall climb, up to
+     * 24 frames as a safety ceiling. Release at the measured apex,
+     * not at a guessed six-frame delay; the next slide must see a
+     * FRESH press edge to allow another immediate native wall-jump. */
+    cpu_wall_jump_hold_frames=cpu_tall_wall_climb ? 24 : 18;
+    if (getenv("MMX_CPU_TRACE"))
+      fprintf(stderr,"[cpu-wall] jump=%u/%u frame=%d dir=%d tall=%d best_y=%u start_y=%u\n",
+              (unsigned)cpu_wall_recovery_jumps,max_kicks,
+              snes_frame_counter,(int)cpu_wall_direction,(int)cpu_tall_wall_climb,
+              (unsigned)cpu_tall_wall_best_y,(unsigned)cpu_tall_wall_start_y);
+    return toward|MMX_CPU_JUMP;
+  }
+
+  /* First opportunity can precede the dedicated wall-slide action.
+   * This is a ONE-SHOT buffered attempt per airborne recovery, not
+   * continuous B spam; the $12 transition is required to count success. */
+  if (!cpu_tall_wall_climb && !wall_slide && near_wall && descending &&
+      !cpu_wall_buffer_attempted &&
+      cpu_wall_recovery_jumps==0 &&
+      !(f->input&MMX_CPU_JUMP) &&
+      (f->body[2]==6 || f->body[2]==8)) {
+    cpu_wall_buffer_attempted=true;
+    cpu_wall_buffer_pending=true;
+    if (getenv("MMX_CPU_TRACE"))
+      fprintf(stderr,"[cpu-wall] buffered near-wall B action=%u frame=%d\n",
+              (unsigned)f->body[2],snes_frame_counter);
+    return toward|MMX_CPU_JUMP;
+  }
+
+  if (cpu_wall_recovery_jumps>=max_kicks && !cpu_wall_jump_hold_frames) {
+    cpu_wall_recovery_phase=MMX_CPU_WALL_FINISHED;
+    return toward;
+  }
+
+  /* Maintaining B through the wall-kick ascent provides its full height,
+   * unlike the old one-frame kick. Release early on new wall slide above.
+   * Continue to steer away briefly, then back toward the same wall. */
+  uint16_t steer=toward;
+  if (cpu_wall_recovery_phase==MMX_CPU_WALL_PUSH) {
+    /* Native wall-kick already provides a strong push-off.
+     * Pressing AWAY again prevented high-wall reattachment. */
+    steer=cpu_tall_wall_climb ? toward : away;
+    if (cpu_wall_recovery_ticks) --cpu_wall_recovery_ticks;
+    if (!cpu_wall_recovery_ticks) {
+      cpu_wall_recovery_phase=MMX_CPU_WALL_RETURN;
+      cpu_wall_recovery_ticks=cpu_tall_wall_climb ? 1 : 9;
+    }
+  } else if (cpu_wall_recovery_phase==MMX_CPU_WALL_RETURN) {
+    if (cpu_wall_recovery_ticks) --cpu_wall_recovery_ticks;
+    if (!cpu_wall_recovery_ticks) cpu_wall_recovery_phase=MMX_CPU_WALL_SEEK;
+  } else cpu_wall_recovery_phase=MMX_CPU_WALL_SEEK;
+  if (cpu_wall_jump_hold_frames) {
+    --cpu_wall_jump_hold_frames;
+    steer|=MMX_CPU_JUMP;
+  }
+  return steer;
+}
+/* Feed native co-op pad input rather than moving sprites directly.
+ * Offline-only host timers preserve variable-height ground jumps and allow
+ * fresh B press edges for wall kicks. No co-op save ABI or netplay changes. */
+static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
+                                     uint16_t leader_pad) {
+  const MmxCoopPlayer *leader=&state.players[controlled_seat],
+                      *follower=&state.players[controlled_seat^1];
+  if (!ram || !state.initialized || state.menu_owner || state.scene_owner ||
+      state.stage_pending || leader->status!=MMX_COOP_ALIVE ||
+      follower->status!=MMX_COOP_ALIVE ||
+      !(leader->body[0x27]&127) || !(follower->body[0x27]&127)) {
+    cpu_companion_reset_motion();
+    return 0;
+  }
+  int dx=(int)word(leader->body+5)-(int)word(follower->body+5);
+  int direction=dx>40 ? 1 : dx< -40 ? -1 : 0;
+  /* In couch CPU mode the other character may get ahead of the human.
+   * If X is moving TOWARD that character, honor the intended stage route
+   * instead of forcing Zero to turn around and ignore the obstacle ahead.
+   * Keep the override local to one shared-screen width. */
+  int intent=(leader_pad&MMX_CPU_RIGHT) && !(leader_pad&MMX_CPU_LEFT) ? 1 :
+             (leader_pad&MMX_CPU_LEFT) && !(leader_pad&MMX_CPU_RIGHT) ? -1 : 0;
+  if (intent && (dx*intent)<-40 && abs(dx)<=176) direction=intent;
+  int x=(int)word(follower->body+5),y=(int)word(follower->body+8);
+  /* Horizontal follow reaches its dead zone even when P1 is standing on
+   * a high platform. Search BOTH sides for an actual close wall before
+   * choosing a route: this is not a reaction to P1's B/jump input.
+   * Run ahead of the early !direction exit below. */
+  /* The human must already be standing on the higher tier. A midair X
+   * jumping in place is not a climb destination and must not steer Zero. */
+  bool elevated_goal=(leader->body[0x2b]&4)!=0 &&
+                      (int)word(leader->body+8)<y-48;
+  bool climb_from_below=false;
+  int climb_face=0;
+  if (!direction && elevated_goal) {
+    int right=cpu_companion_wall_face(ram,x,y+16,1);
+    int left=cpu_companion_wall_face(ram,x,y+16,-1);
+    /* Don't start crossing a distant gap merely because a wall exists
+     * somewhere far away. Use a wall within 80 native stage pixels. */
+    if (right>80) right=0;
+    if (left>80) left=0;
+    direction=MmxCoopCpuChooseClimbDirection(dx,right,left);
+    if (direction) {
+      climb_from_below=true;
+      climb_face=direction>0 ? right : left;
+    }
+  }
+  bool grounded=(follower->body[0x2b]&4)!=0;
+  bool wall_slide=!grounded && follower->body[2]==0x10;
+  /* Use actual Y-position change across game frames for descent, rather
+   * than mistaking an upward wall-kick action $12 for a downward slide. */
+  bool descending=!grounded && cpu_wall_y_valid &&
+                  y>(int)cpu_wall_last_y;
+  /* Measured apex: Zero has already climbed >=6 pixels since kick
+   * takeoff and his Y has stopped decreasing. A Y equality is enough;
+   * it is the last opportunity to release B before descent and slide. */
+  bool kick_apex=!grounded && cpu_tall_wall_climb &&
+      cpu_wall_recovery_jumps>0 && cpu_wall_y_valid &&
+      (int)cpu_tall_wall_kick_y-y>=6 &&
+      y>=(int)cpu_wall_last_y;
+  if (grounded) cpu_wall_y_valid=false;
+  else cpu_wall_y_valid=true;
+  cpu_wall_last_y=(uint16_t)y;
+  int touching_wall=!grounded &&
+      (wall_slide || descending) ?
+      cpu_companion_air_wall_contact(ram,x,y,direction) : 0;
+  /* Detect genuine obstruction by observing lack of horizontal progress
+   * while repeatedly driving a direction. Useful for moving gates and
+   * objects that are not represented in the static terrain map. */
+  if (grounded && direction && direction==cpu_stall_direction &&
+      abs(x-(int)cpu_last_x)<=1) {
+    if (cpu_stall_ticks<24) ++cpu_stall_ticks;
+  } else cpu_stall_ticks=0;
+  cpu_last_x=(uint16_t)x;cpu_stall_direction=(int8_t)direction;
+  uint16_t input=direction>0 ? MMX_CPU_RIGHT : direction<0 ? MMX_CPU_LEFT : 0;
+  if (cpu_jump_cooldown_frames) --cpu_jump_cooldown_frames;
+  /* This is the highest-priority locomotion state. A landing exits
+   * immediately, even when only one wall jump has been performed. It
+   * is checked BEFORE any recovery B press or phase change. */
+  if (grounded && cpu_wall_recovery_phase!=MMX_CPU_WALL_IDLE) {
+    if (getenv("MMX_CPU_TRACE"))
+      fprintf(stderr,"[cpu-wall] landed after %u/%u kick(s) start_y=%u best_y=%u landed_y=%d gain=%d\n",
+              (unsigned)cpu_wall_recovery_jumps,
+              cpu_tall_wall_climb ? 8u : 2u,
+              (unsigned)cpu_tall_wall_start_y,(unsigned)cpu_tall_wall_best_y,
+              y,(int)cpu_tall_wall_start_y-(int)cpu_tall_wall_best_y);
+    cpu_wall_recovery_phase=cpu_wall_recovery_jumps=cpu_wall_recovery_ticks=0;
+    cpu_wall_recovery_left_slide=cpu_wall_buffer_pending=cpu_wall_buffer_attempted=false;
+    cpu_wall_jump_hold_frames=0;
+    cpu_tall_wall_climb=false;cpu_tall_wall_start_y=cpu_tall_wall_best_y=0;
+    cpu_tall_wall_trace_ticks=0;
+    cpu_tall_wall_kick_x=cpu_tall_wall_kick_y=0;
+    cpu_wall_direction=0;
+    cpu_wall_escape_reported=false;
+    cpu_jump_cooldown_frames=0;
+  }
+  /* Wall contact starts a PREPARATION phase even before the native
+   * animation switches to slide. The jump itself is only pressed on a
+   * genuine slide frame: this avoids using a recovery kick too early. */
+  if (!grounded && (wall_slide || touching_wall ||
+                    cpu_wall_recovery_phase!=MMX_CPU_WALL_IDLE)) {
+    if (cpu_wall_recovery_phase==MMX_CPU_WALL_IDLE) {
+      cpu_wall_direction=(int8_t)(
+          touching_wall ? touching_wall :
+          direction ? direction : (follower->body[0x69]&64 ? 1 : -1));
+      cpu_wall_recovery_phase=MMX_CPU_WALL_SEEK;
+      cpu_wall_recovery_jumps=cpu_wall_recovery_ticks=0;
+      cpu_wall_escape_reported=false;
+      cpu_wall_recovery_left_slide=cpu_wall_buffer_pending=cpu_wall_buffer_attempted=false;
+      cpu_wall_jump_hold_frames=0;
+      cpu_jump_hold_frames=cpu_cliff_dash_frames=0;
+      cpu_jump_seen_airborne=false;
+      /* X is a route GOAL only when settled on higher solid ground.
+       * Use the longer climb budget while that goal is at least 96px up;
+       * do not extend recovery merely because the human jumps in place. */
+      cpu_tall_wall_climb=(leader->body[0x2b]&4)!=0 &&
+          ((int)word(leader->body+8) <= y-96);
+      cpu_tall_wall_start_y=cpu_tall_wall_best_y=(uint16_t)y;
+      cpu_tall_wall_trace_ticks=0;
+      cpu_tall_wall_kick_x=(uint16_t)x;
+      cpu_tall_wall_kick_y=(uint16_t)y;
+      if (getenv("MMX_CPU_TRACE"))
+        fprintf(stderr,"[cpu-wall] contact dir=%d action=%u vy=%d slide=%d tall=%d leader_above=%d\n",
+                (int)cpu_wall_direction,(unsigned)follower->body[2],
+                (int16_t)word(follower->body+0x1c),(int)wall_slide,
+                (int)cpu_tall_wall_climb,y-(int)word(leader->body+8));
+    }
+    if (cpu_tall_wall_climb && y<(int)cpu_tall_wall_best_y)
+      cpu_tall_wall_best_y=(uint16_t)y;
+    bool near=cpu_companion_wall_jump_near(ram,x,y,cpu_wall_direction);
+    uint16_t wall_input=cpu_companion_wall_recovery(
+        follower,wall_slide,near,descending,kick_apex);
+    /* Last-chance retreat: after a confirmed kick has already peaked
+     * and Zero has dropped back to its starting height without finding
+     * another wall slide, direct him to an ACTUALLY SUPPORTED lower shelf.
+     * A Modern-mode Zero can add one native air dash for a distant
+     * landing. X3 mode has a charged buster but no Modern air dash. */
+    if (cpu_wall_recovery_jumps && !wall_slide && !near && descending &&
+        y>=(int)cpu_tall_wall_kick_y &&
+        (follower->body[2]==6 || follower->body[2]==8)) {
+      int escape_dist=0;
+      int escape_dir=cpu_companion_wall_escape(
+          ram,x,y,cpu_wall_direction,&escape_dist);
+      if (escape_dir) {
+        wall_input=(uint16_t)(escape_dir>0?MMX_CPU_RIGHT:MMX_CPU_LEFT);
+        if (follower->character==MMX_COOP_ZERO &&
+            follower->zero.modern.enabled &&
+            !follower->zero.modern.dash_used &&
+            !(follower->input&MMX_CPU_DASH) && escape_dist>=48)
+          wall_input|=MMX_CPU_DASH;
+        if (!cpu_wall_escape_reported && getenv("MMX_CPU_TRACE"))
+          fprintf(stderr,"[cpu-safety] wall-kick retreat x=%d y=%d escape_dir=%d floor_dist=%d modern_airdash=%d\n",
+                  x,y,escape_dir,escape_dist,
+                  (int)((wall_input&MMX_CPU_DASH)!=0));
+        cpu_wall_escape_reported=true;
+      }
+    }
+    if (cpu_tall_wall_climb && getenv("MMX_CPU_TRACE") &&
+        cpu_wall_recovery_jumps && cpu_tall_wall_trace_ticks<48) {
+      unsigned tick=cpu_tall_wall_trace_ticks++;
+      if (tick%3==0 || wall_slide) {
+        fprintf(stderr,
+            "[cpu-climb] t=%u x=%d y=%d kickx=%u kicky=%u offx=%d rise=%d action=%u vy=%d slide=%d wallL=%d wallR=%d input=%c%c hold=%u kicks=%u\n",
+            tick,x,y,(unsigned)cpu_tall_wall_kick_x,
+            (unsigned)cpu_tall_wall_kick_y,
+            x-(int)cpu_tall_wall_kick_x,
+            (int)cpu_tall_wall_kick_y-y,
+            (unsigned)follower->body[2],
+            (int16_t)word(follower->body+0x1c),(int)wall_slide,
+            (int)cpu_companion_wall_jump_near(ram,x,y,-1),
+            (int)cpu_companion_wall_jump_near(ram,x,y,1),
+            (wall_input&MMX_CPU_LEFT)?'L':(wall_input&MMX_CPU_RIGHT)?'R':'-',
+            (wall_input&MMX_CPU_JUMP)?'B':'-',
+            (unsigned)cpu_wall_jump_hold_frames,
+            (unsigned)cpu_wall_recovery_jumps);
+      }
+    }
+    return wall_input;
+  }
+  /* Preserve takeoff direction and hold B long enough for a useful ascent,
+   * even if P1 changes direction while the CPU is already jumping. */
+  if (cpu_jump_hold_frames) {
+    if (!grounded) cpu_jump_seen_airborne=true;
+    if (grounded && cpu_jump_seen_airborne) {
+      /* Native jump has already landed: stop holding B immediately. */
+      cpu_jump_hold_frames=cpu_cliff_dash_frames=0;
+      cpu_jump_seen_airborne=false;
+    } else {
+      --cpu_jump_hold_frames;
+      uint16_t jump=(cpu_jump_direction>0 ? MMX_CPU_RIGHT : MMX_CPU_LEFT)|MMX_CPU_JUMP;
+      if (cpu_cliff_dash_frames) {
+        jump|=MMX_CPU_DASH;
+        --cpu_cliff_dash_frames;
+      }
+      return jump;
+    }
+  }
+  if (cpu_cliff_dash_frames && !grounded && !wall_slide) {
+    /* Preserve momentum briefly toward the raised wall, even when B is
+     * released to restore a future wall-jump press edge. */
+    input|=MMX_CPU_DASH;
+    --cpu_cliff_dash_frames;
+  } else if (grounded) cpu_cliff_dash_frames=0;
+  /* Shoot nearby enemies outside jump takeoff/kick phases. */
+  int facing=direction ? direction : (follower->body[0x69]&64 ? 1 : -1);
+  if (ram[0xb9c]%12==0 && cpu_companion_enemy_ahead(ram,x,y,facing))
+    input|=MMX_CPU_FIRE;
+
+  if ((!direction || !grounded) && getenv("MMX_CPU_TRACE")) {
+    static int last_idle_trace=-1000;
+    if (snes_frame_counter-last_idle_trace>=120) {
+      fprintf(stderr,
+          "[cpu-state] x=%d y=%d dx=%d dir=%d high=%d climb_side=%d action=%u grounded=%d wall=%d recovery=%u hold=%u\n",
+          x,y,dx,direction,(int)elevated_goal,(int)climb_from_below,
+          (unsigned)follower->body[2],(int)grounded,touching_wall,
+          (unsigned)cpu_wall_recovery_phase,(unsigned)cpu_jump_hold_frames);
+      last_idle_trace=snes_frame_counter;
+    }
+  }
+  if (!grounded || !direction) return input;
+  int feet=y+16;
+  bool edge=cpu_companion_ground_missing(ram,x,feet,direction);
+  bool obstacle=cpu_companion_obstacle_ahead(ram,x,y,direction);
+  bool blocked=cpu_stall_ticks>=10;
+  /* P1's Y position and B button must NOT influence CPU jump decisions.
+   * These checks use the follower's own ground and obstruction state only.
+   * If the ground ends ahead and there is no reachable landing, wait.
+   * Do this before obstruction/stall reactions to avoid walking into void. */
+  int landing_distance=0, landing_rise=0;
+  bool short_landing=edge && cpu_companion_gap_reachable(
+      ram,x,feet,direction,&landing_distance,&landing_rise);
+  /* When X is already standing on a lower tier, a verified downward
+   * landing may be more useful than a blind horizontal jump or WAIT. */
+  int drop_distance=0,drop_depth=0;
+  bool lower_goal=edge && (leader->body[0x2b]&4)!=0 &&
+      dx*direction>40 &&
+      (int)word(leader->body+8)-y>=20 &&
+      (int)word(leader->body+8)-y<=112;
+  bool lower_landing=lower_goal && cpu_companion_lower_landing(
+      ram,x,feet,direction,(int)word(leader->body+8)+16,
+      &drop_distance,&drop_depth);
+  bool safe_drop=lower_landing && drop_distance<=72;
+  /* Farther lower ledges call for a normal jump (and perhaps dash),
+   * so the CPU has the lateral flight time to reach the floor. */
+  if (lower_landing && !short_landing && !safe_drop) {
+    short_landing=true;
+    landing_distance=drop_distance;
+    landing_rise=-drop_depth;
+  }
+  int wall_distance=0;
+  /* Look for a tall climbable wall while STILL on safe ground, not only
+   * after the cliff sensor fires. Once within ~48px, proactively jump at
+   * the wall. At a lip, allow a longer native dash-jump approach if the
+   * wall's top has a valid, walkable landing. */
+  bool high_goal=elevated_goal && (dx*direction>40 || climb_from_below);
+  /* Only scan high columns when the CPU is near a gap, touching a
+   * possible obstacle or has a higher destination ahead. A full-height
+   * scan every ordinary walking frame needlessly burns CPU. */
+  bool raised_wall=(edge || obstacle || high_goal) && !short_landing &&
+      cpu_companion_raised_wall(ram,x,feet,direction,&wall_distance);
+  bool goal_wall=false;
+  if (!raised_wall && high_goal && !short_landing) {
+    int face=climb_from_below ? climb_face :
+             cpu_companion_wall_face(ram,x,feet,direction);
+    /* High destination plus a real solid wall is an actionable route even
+     * when horizontal follow distance is zero. The wall must be within
+     * sensor range, never inferred solely from X's height. */
+    goal_wall=face && (climb_from_below || dx*direction>face);
+    if (goal_wall) wall_distance=face;
+  }
+  bool climb_takeoff=(raised_wall || goal_wall) &&
+                     (edge || wall_distance<=48);
+  /* Opt-in field diagnostics make real stage geometry inspectable without
+   * assuming a screenshot reveals the actual SNES collision classes.
+   * This never affects controller input or deterministic guest state. */
+  if ((edge || climb_takeoff || blocked || obstacle) && getenv("MMX_CPU_TRACE")) {
+    static int last_log=-1000;
+    if (snes_frame_counter-last_log>=90) {
+      fprintf(stderr,"[cpu-nav] edge=%d x=%d feet=%d dir=%d p1dx=%d p1dy=%d landing=%d dist=%d rise=%d drop=%d drop_dist=%d drop_depth=%d raised=%d goalwall=%d wall_dist=%d grounded=%d cooldown=%u\n",
+              (int)edge,x,feet,direction,dx,
+              (int)word(leader->body+8)-y,(int)short_landing,
+              landing_distance,landing_rise,(int)safe_drop,drop_distance,
+              drop_depth,(int)raised_wall,(int)goal_wall,wall_distance,
+              (int)grounded,(unsigned)cpu_jump_cooldown_frames);
+      last_log=snes_frame_counter;
+    }
+  }
+  /* Terrain sensing takes priority over ordinary follow: a missing floor
+   * triggers a deliberate jump toward an identified landing/wall, never
+   * an extra walking frame into unknown void. A wall below an elevated
+   * destination initiates a climb without waiting for X's jump timing. */
+  MmxCpuMoveDecision move=MmxCoopCpuChooseMove(
+      edge,short_landing,(raised_wall || goal_wall),climb_takeoff,
+      safe_drop,obstacle || blocked);
+  if (move==MMX_CPU_MOVE_WAIT)
+    return input&(uint16_t)~(MMX_CPU_LEFT|MMX_CPU_RIGHT|MMX_CPU_JUMP|MMX_CPU_DASH);
+  /* A short safe DROP is deliberately NOT a jump: keep moving toward
+   * the floor X is standing on, and let the native fall/land logic run. */
+  if (move==MMX_CPU_MOVE_WALK || move==MMX_CPU_MOVE_DROP) return input;
+
+  bool headroom=true;
+  for (int offset=-6;offset<=6;offset+=6) {
+    if (MmxWeaponsTerrainSolid(ram,x+offset,y-25,false,NULL) ||
+        MmxWeaponsTerrainSolid(ram,x+offset,y-35,false,NULL)) {
+      headroom=false;break;
+    }
+  }
+  if (!headroom || cpu_jump_cooldown_frames) {
+    if (edge) input&=(uint16_t)~(MMX_CPU_LEFT|MMX_CPU_RIGHT);
+    return input;
+  }
+  /* Hold native jump for 21 input frames in total (this frame plus
+   * 20 polls), allowing the game's variable-height jump to finish its
+   * ascent. Release earlier if native ground contact returns or a real
+   * airborne wall contact takes priority. */
+  cpu_jump_hold_frames=20;
+  cpu_jump_seen_airborne=false;
+  if (getenv("MMX_CPU_TRACE"))
+    fprintf(stderr,"[cpu-jump] takeoff x=%d y=%d mode=%d hold=21 landing_dist=%d rise=%d\n",
+            x,y,(int)move,landing_distance,landing_rise);
+  /* A climb attempt can repeat shortly after a failed takeoff; ordinary
+   * short-hop/ledge navigation retains the longer anti-spam cooldown. */
+  cpu_jump_cooldown_frames=(move==MMX_CPU_MOVE_CLIMB) ? 24 : 48;
+  cpu_jump_direction=(int8_t)direction;
+  /* An elevated wall >~72px away can need more horizontal range than a
+   * normal hop. Ask Zero to dash-jump as part of his own route choice;
+   * the game's native equipment/movement code still controls the result. */
+  /* Long safe crossings need dash momentum too, not only climbs.
+   * A 100+px landing previously triggered an ordinary short ground jump
+   * and often failed even when the route scan found a sound landing. */
+  cpu_cliff_dash_frames=(follower->character==MMX_COOP_ZERO &&
+      ((move==MMX_CPU_MOVE_CLIMB && wall_distance>72) ||
+       (edge && short_landing && landing_distance>80))) ? 20 : 0;
+  uint16_t takeoff=(input&(uint16_t)~MMX_CPU_FIRE)|MMX_CPU_JUMP;
+  if (cpu_cliff_dash_frames) {
+    takeoff|=MMX_CPU_DASH;
+    --cpu_cliff_dash_frames;
+  }
+  return takeoff;
+}
+/* Real DualSense L2 is an analog trigger with no SNES pad bit; the desktop
+ * host samples it separately. Tests can drive this host-only signal too. */
+void MmxCoopSetSwitchTrigger(bool held) { cpu_l2_trigger_held=held; }
 void MmxCoopPoll(uint16_t p1, uint16_t p2) {
   if (!enabled) return;
   uint16_t inputs[2] = {p1 & 4095, p2 & 4095};
+  /* Offline CPU mode: a new press of the physical L2 analog trigger
+   * switches the controlled character. The L2 signal is NOT a SNES button,
+   * so Start/Select and native L/R weapon changes still work normally.
+   * One press swaps once; holding L2 never oscillates the active seat. */
+  bool offline_cpu = cpu_companion
+#if SNESRECOMP_NET
+      && !snes_netplay_active()
+#endif
+      ;
+  if (offline_cpu) {
+    /* Physical P1 must NEVER remain bound to the fallen seat while the
+     * other is alive. The L2 swap used to require both alive and ignored
+     * the lost seat until the next level, leaving X uncontrollable if the
+     * human had swapped to Zero before Zero died. Follow the live player
+     * on this very input poll, before AI input routing or pressed edges. */
+    unsigned survivor=cpu_human_seat^1;
+    const MmxCoopPlayer *controlled=&state.players[cpu_human_seat];
+    const MmxCoopPlayer *remaining=&state.players[survivor];
+    if (state.initialized &&
+        (controlled->status!=MMX_COOP_ALIVE ||
+         !(controlled->body[0x27]&127)) &&
+        remaining->status==MMX_COOP_ALIVE &&
+        (remaining->body[0x27]&127)) {
+      cpu_human_seat=(uint8_t)survivor;
+      cpu_companion_reset_motion();
+      if (getenv("MMX_CPU_TRACE"))
+        fprintf(stderr,
+            "[cpu-switch] controlled seat fallen; DualSense handed to surviving %s (seat %u)\n",
+            state.players[survivor].character==MMX_COOP_ZERO?"Zero":"X",
+            survivor);
+    }
+    bool held=cpu_l2_trigger_held;
+    if (held && !cpu_swap_trigger_down && state.initialized &&
+        !state.menu_owner && !state.scene_owner && !state.stage_pending &&
+        state.players[0].status==MMX_COOP_ALIVE &&
+        state.players[1].status==MMX_COOP_ALIVE &&
+        (state.players[0].body[0x27]&127) &&
+        (state.players[1].body[0x27]&127)) {
+      cpu_human_seat^=1;
+      cpu_companion_reset_motion();
+    }
+    cpu_swap_trigger_down=held;
+    inputs[cpu_human_seat]=p1&4095;
+    unsigned ai=cpu_human_seat^1;
+    inputs[ai]=cpu_companion_input(g_ram,cpu_human_seat,p1);
+    if (state.initialized && !state.menu_owner && !state.scene_owner &&
+        !state.stage_pending)
+      inputs[ai]=cpu_companion_zero_combat(g_ram,&state.players[ai],
+                                           &state.players[cpu_human_seat],
+                                           inputs[ai]);
+  } else {
+    cpu_swap_trigger_down=0;
+  }
   for (unsigned i = 0; i < 2; ++i) {
     state.players[i].pressed = inputs[i] & ~state.players[i].input;
     state.players[i].input = inputs[i];
@@ -685,6 +1658,38 @@ bool MmxCoopFindLanding(const uint8_t *r,uint16_t *out_x,uint16_t *out_y) {
     }
   }
   return false;
+}
+/* Speedrun-assist fallback: only save the CPU companion from a real void
+ * pit, never from enemy damage. Uses the co-op's tested collision-aware
+ * landing search near the controlled character; retains HP and inventory.
+ * Activated before native bottom-screen fatal contact, with throttling.
+ * If no safe landing exists, don't fabricate a coordinate or suppress death. */
+static void cpu_companion_rescue(uint8_t *r) {
+  if (!cpu_traversal_active() || !state.initialized || !r ||
+      state.menu_owner || state.scene_owner || state.stage_pending ||
+      r[0xd1]!=2 || r[0xd2]!=4 || r[0xd3]!=4 ||
+      r[0x1f0c] || r[0x1f23] || r[0x1f48]) return;
+  if (cpu_rescue_cooldown) {--cpu_rescue_cooldown;return;}
+  const unsigned target=cpu_human_seat^1;
+  MmxCoopPlayer *f=&state.players[target], *h=&state.players[cpu_human_seat];
+  if (f->status!=MMX_COOP_ALIVE || h->status!=MMX_COOP_ALIVE ||
+      !(f->body[0x27]&127) || !(h->body[0x27]&127) ||
+      f->body[2]==12 || h->body[2]==12) return;
+  const int bottom=(int)word(r+0x1e5c)+224;
+  /* Native shared-screen pit death begins around bottom+32. Rescue in the
+   * final few pixels only; the old bottom-64 threshold teleported Zero
+   * nearly 100 pixels too early, before he could complete wall-jumps. */
+  if ((int)word(f->body+8)<bottom+24 || floor_below(r,f->body)) return;
+  unsigned previous=state.current;
+  if (!MmxCoopSelect(r,cpu_human_seat)) return;
+  uint16_t x=0,y=0;
+  bool safe=MmxCoopFindLanding(r,&x,&y);
+  if (safe) {
+    place_other(r,x,y,true);
+    cpu_rescue_cooldown=90;
+    cpu_companion_reset_motion();
+  }
+  MmxCoopSelect(r,previous);
 }
 static void clear_player_combat(uint8_t *r,unsigned seat) {
   MmxCoopSelect(r,seat);MmxWeaponsCancelShots(r);MmxZeroCancel(r);
@@ -802,7 +1807,8 @@ static bool scene_tick(uint8_t *r) {
    * he keeps falling into the native death zone. The partner is also
    * beamed as soon as an unentered Dr. Light capsule ($4D) exists while he
    * is away: its camera lock is about to leave him behind. */
-  if(!state.scene_owner && !MmxCoopViewsOnline() && state.players[0].status==MMX_COOP_ALIVE &&
+  if(!state.scene_owner && !cpu_traversal_active() && !MmxCoopViewsOnline() &&
+      state.players[0].status==MMX_COOP_ALIVE &&
       state.players[1].status==MMX_COOP_ALIVE && (state.players[0].body[0x27]&127) &&
       (state.players[1].body[0x27]&127)) {
     /* MmxCoopFrameTick has just captured the current body: both stored
@@ -1992,7 +2998,7 @@ static void controller_hook(CpuState *cpu, uint32_t pc) {
     MmxCoopInitialize(g_ram);
     diagnostic_event(g_ram,cpu,pc,"controller-enter");
     if (state.initialized && !state.controller_pass) {
-      if(state.current==1) MmxCoopApplyInput(g_ram);
+      if(state.current==1 || cpu_companion) MmxCoopApplyInput(g_ram);
       state.controller_pass=1;
       TRACE(CONTROLLER,pc,0,0,cpu);
       TRACE_MARK(state.current,CONTROLLER);
