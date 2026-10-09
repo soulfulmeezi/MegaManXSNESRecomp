@@ -632,6 +632,14 @@ static bool cpu_companion_supported(const uint8_t *ram, int x, int feet) {
     if (MmxWeaponsTerrainSolid(ram,x,feet+depth,true,NULL)) return true;
   return false;
 }
+/* Short, directional ground-level rays from the follower's OWN feet.
+ * Checking both 20 and 28 pixels ahead lets Zero notice an edge before
+ * his sprite crosses it. Never sample P1's position or jump input here. */
+static bool cpu_companion_ground_missing(const uint8_t *ram,int x,int feet,int dir) {
+  if (!ram || !dir || !cpu_companion_supported(ram,x,feet)) return false;
+  return !cpu_companion_supported(ram,x+dir*20,feet) ||
+         !cpu_companion_supported(ram,x+dir*28,feet);
+}
 /* A pit jump needs a plausible *landing*, not just a nearby drop.
  * Sample only solid walkable terrain near the follower's current foot level.
  * This is a conservative short-jump planner, not a proof of a clear arc or a
@@ -707,7 +715,7 @@ static bool cpu_companion_raised_wall(const uint8_t *ram,int x,int feet,
  * copy the human's jump input: the wall and goal must both be present. */
 static int cpu_companion_wall_face(const uint8_t *ram,int x,int feet,int dir) {
   if (!ram || !dir) return 0;
-  for (int d=24;d<=96;d+=4) {
+  for (int d=12;d<=144;d+=4) {
     int wx=x+dir*d;
     if (MmxWeaponsTerrainSolid(ram,wx,feet-16,false,NULL) &&
         MmxWeaponsTerrainSolid(ram,wx,feet-36,false,NULL) &&
@@ -836,9 +844,8 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
     input|=MMX_CPU_FIRE;
 
   if (!grounded || !direction) return input;
-  int ahead=x+direction*22,feet=y+16;
-  bool edge=cpu_companion_supported(ram,x,feet) &&
-      !cpu_companion_supported(ram,ahead,feet);
+  int feet=y+16;
+  bool edge=cpu_companion_ground_missing(ram,x,feet,direction);
   bool obstacle=cpu_companion_obstacle_ahead(ram,x,y,direction);
   bool blocked=cpu_stall_ticks>=10;
   /* P1's Y position and B button must NOT influence CPU jump decisions.
@@ -851,13 +858,21 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
    * after the cliff sensor fires. Once within ~48px, proactively jump at
    * the wall. At a lip, allow a longer native dash-jump approach if the
    * wall's top has a valid, walkable landing. */
-  bool raised_wall=direction && !short_landing &&
+  bool high_goal=(int)word(leader->body+8)<y-48 && dx*direction>40;
+  /* Only scan high columns when the CPU is near a gap, touching a
+   * possible obstacle or has a higher destination ahead. A full-height
+   * scan every ordinary walking frame needlessly burns CPU. */
+  bool raised_wall=(edge || obstacle || high_goal) && !short_landing &&
       cpu_companion_raised_wall(ram,x,feet,direction,&wall_distance);
   bool goal_wall=false;
-  if (!raised_wall && direction && !short_landing &&
-      (int)word(leader->body+8)<y-64 && dx*direction>40) {
+  if (!raised_wall && high_goal && !short_landing) {
     int face=cpu_companion_wall_face(ram,x,feet,direction);
-    goal_wall=face && dx*direction>face && face<=80;
+    /* The vertical destination makes this a climb route, NOT a copy of
+     * the player's jump. The face itself must be real solid collision.
+     * Up to 144px allows a controlled jump toward the near wall at
+     * the far side of a Highway gap; do not commit before reaching
+     * the lip unless Zero is already within 48px of that wall. */
+    goal_wall=face && dx*direction>face;
     if (goal_wall) wall_distance=face;
   }
   bool climb_takeoff=(raised_wall || goal_wall) &&
@@ -874,12 +889,16 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
       last_log=snes_frame_counter;
     }
   }
-  /* In the user's highway gap, the right-hand landing is UP a wall rather
-   * than at the current foot level. Permit a deliberate jump into a detected
-   * climbable wall, but never launch toward completely unseen/unsafe terrain. */
-  if (edge && !short_landing && !raised_wall && !goal_wall)
+  /* Terrain sensing takes priority over ordinary follow: a missing floor
+   * triggers a deliberate jump toward an identified landing/wall, never
+   * an extra walking frame into unknown void. A wall below an elevated
+   * destination initiates a climb without waiting for X's jump timing. */
+  MmxCpuMoveDecision move=MmxCoopCpuChooseMove(
+      edge,short_landing,(raised_wall || goal_wall),climb_takeoff,
+      obstacle || blocked);
+  if (move==MMX_CPU_MOVE_WAIT)
     return input&(uint16_t)~(MMX_CPU_LEFT|MMX_CPU_RIGHT|MMX_CPU_JUMP|MMX_CPU_DASH);
-  if (!edge && !obstacle && !blocked && !climb_takeoff) return input;
+  if (move==MMX_CPU_MOVE_WALK) return input;
 
   bool headroom=true;
   for (int offset=-6;offset<=6;offset+=6) {
@@ -895,12 +914,12 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
   cpu_jump_hold_frames=12;
   /* A climb attempt can repeat shortly after a failed takeoff; ordinary
    * short-hop/ledge navigation retains the longer anti-spam cooldown. */
-  cpu_jump_cooldown_frames=climb_takeoff ? 24 : 48;
+  cpu_jump_cooldown_frames=(move==MMX_CPU_MOVE_CLIMB) ? 24 : 48;
   cpu_jump_direction=(int8_t)direction;
   /* An elevated wall >~72px away can need more horizontal range than a
    * normal hop. Ask Zero to dash-jump as part of his own route choice;
    * the game's native equipment/movement code still controls the result. */
-  cpu_cliff_dash_frames=(climb_takeoff && wall_distance>72 &&
+  cpu_cliff_dash_frames=(move==MMX_CPU_MOVE_CLIMB && wall_distance>72 &&
                          follower->character==MMX_COOP_ZERO) ? 20 : 0;
   uint16_t takeoff=(input&(uint16_t)~MMX_CPU_FIRE)|MMX_CPU_JUMP;
   if (cpu_cliff_dash_frames) {
