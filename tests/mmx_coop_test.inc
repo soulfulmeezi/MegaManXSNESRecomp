@@ -1133,21 +1133,17 @@ static void coop_cpu_companion_checks(const char *fixture) {
   MmxCoopPoll(0,0);
   MmxCoopSetCpuCompanion(true);
   MmxCoopPoll(SNES_PAD_SELECT|SNES_PAD_R,0);
+  /* The same held chord must not switch on subsequent polls. */
+  MmxCoopPoll(SNES_PAD_SELECT|SNES_PAD_R,0);
+  MmxCoopPoll(SNES_PAD_SELECT|SNES_PAD_R,0);
   MmxCoopPoll(SNES_PAD_RIGHT,0);
   s=MmxCoopGetState();
   check(s.players[1].input==SNES_PAD_RIGHT,
-      "Select+R routes physical P1 input to Zero");
-  /* Chord is edge-triggered: holding it does not toggle repeatedly. */
-  MmxCoopPoll(SNES_PAD_SELECT|SNES_PAD_R,0);
+      "Select+R routes physical P1 input to Zero without retriggering");
   MmxCoopPoll(SNES_PAD_SELECT|SNES_PAD_R,0);
   MmxCoopPoll(SNES_PAD_LEFT,0);
   s=MmxCoopGetState();
-  check(s.players[1].input==SNES_PAD_LEFT,
-      "holding Select+R cannot swap continuously");
-  MmxCoopPoll(SNES_PAD_SELECT|SNES_PAD_R,0);
-  MmxCoopPoll(SNES_PAD_RIGHT,0);
-  s=MmxCoopGetState();
-  check(s.players[0].input==SNES_PAD_RIGHT,
+  check(s.players[0].input==SNES_PAD_LEFT,
       "second Select+R routes physical P1 input back to X");
   MmxCoopSetCpuCompanion(false);
   MmxCoopPoll(0,SNES_PAD_LEFT);s=MmxCoopGetState();
