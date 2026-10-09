@@ -35,6 +35,7 @@ static bool enabled;
 static bool cpu_companion; /* Opt-in local mode; never stored in guest save state. */
 static uint8_t cpu_jump_hold_frames, cpu_jump_cooldown_frames;
 static uint8_t cpu_wall_kick_cooldown, cpu_wall_push_frames;
+static uint8_t cpu_wall_return_frames;
 static uint8_t cpu_human_seat, cpu_swap_chord_down, cpu_rescue_cooldown;
 static uint8_t cpu_stall_ticks;
 static uint16_t cpu_last_x;
@@ -339,7 +340,7 @@ static void shot_ghost_reset(void);
 static void lift_reset(void);
 static void cpu_companion_reset_motion(void) {
   cpu_jump_hold_frames=cpu_jump_cooldown_frames=0;
-  cpu_wall_kick_cooldown=cpu_wall_push_frames=0;
+  cpu_wall_kick_cooldown=cpu_wall_push_frames=cpu_wall_return_frames=0;
   cpu_jump_direction=cpu_wall_push_direction=0;
   cpu_stall_ticks=0;cpu_last_x=0;cpu_stall_direction=0;
 }
@@ -691,11 +692,17 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
   if (cpu_jump_cooldown_frames) --cpu_jump_cooldown_frames;
   if (cpu_wall_kick_cooldown) --cpu_wall_kick_cooldown;
 
-  /* After a wall kick, briefly steer AWAY from the wall to clear collision.
-   * Direction returns to P1 once the kick is underway. */
+  /* A reliable wall-jump cycle has three phases: kick, brief separation,
+   * then re-approach while rising so the native wall-slide can re-engage.
+   * Eight frames of continuous push AWAY previously moved Zero too far
+   * from the wall; gravity could win before he found it again. */
   if (cpu_wall_push_frames) {
     --cpu_wall_push_frames;
     return cpu_wall_push_direction>0 ? MMX_CPU_RIGHT : MMX_CPU_LEFT;
+  }
+  if (cpu_wall_return_frames) {
+    --cpu_wall_return_frames;
+    return cpu_wall_push_direction>0 ? MMX_CPU_LEFT : MMX_CPU_RIGHT;
   }
   if (wall_slide && cpu_jump_hold_frames) {
     /* An ordinary B hold is not a new wall-jump press. Release it first. */
@@ -706,10 +713,14 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
     /* Action $10 is the original native wall-slide. Jump while still against
      * the wall, then push away. Repeat if it becomes a wall-slide again.
      * This is NOT a permanent wall cling or an artificial vertical teleport. */
-    int wall_direction=direction ? direction : (follower->body[0x69]&64 ? 1 : -1);
+    int wall_direction=
+        MmxWeaponsTerrainSolid(ram,x+11,y-4,false,NULL) ? 1 :
+        MmxWeaponsTerrainSolid(ram,x-11,y-4,false,NULL) ? -1 :
+        (direction ? direction : (follower->body[0x69]&64 ? 1 : -1));
     cpu_wall_push_direction=(int8_t)-wall_direction;
-    cpu_wall_push_frames=8;
-    cpu_wall_kick_cooldown=22;
+    cpu_wall_push_frames=4;
+    cpu_wall_return_frames=9;
+    cpu_wall_kick_cooldown=18;
     return (wall_direction>0 ? MMX_CPU_RIGHT : MMX_CPU_LEFT)|MMX_CPU_JUMP;
   }
   /* Preserve takeoff direction and hold B long enough for a useful ascent,
