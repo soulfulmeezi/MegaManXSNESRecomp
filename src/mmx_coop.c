@@ -52,6 +52,8 @@ static uint8_t cpu_wall_jump_hold_frames;
  * accidental slides keep the original two-kick safety limit. */
 static bool cpu_tall_wall_climb;
 static uint16_t cpu_tall_wall_start_y, cpu_tall_wall_best_y;
+static uint16_t cpu_tall_wall_kick_x, cpu_tall_wall_kick_y;
+static uint8_t cpu_tall_wall_trace_ticks;
 static bool cpu_wall_y_valid;
 static uint16_t cpu_wall_last_y;
 static uint8_t cpu_human_seat, cpu_swap_trigger_down, cpu_rescue_cooldown;
@@ -364,6 +366,8 @@ static void cpu_companion_reset_motion(void) {
   cpu_wall_recovery_left_slide=cpu_wall_buffer_pending=cpu_wall_buffer_attempted=false;
   cpu_wall_jump_hold_frames=0;cpu_wall_y_valid=false;cpu_wall_last_y=0;
   cpu_tall_wall_climb=false;cpu_tall_wall_start_y=cpu_tall_wall_best_y=0;
+  cpu_tall_wall_kick_x=cpu_tall_wall_kick_y=0;
+  cpu_tall_wall_trace_ticks=0;
   cpu_jump_direction=cpu_wall_direction=0;
   cpu_stall_ticks=0;cpu_last_x=0;cpu_stall_direction=0;
 }
@@ -908,8 +912,13 @@ static uint16_t cpu_companion_wall_recovery(const MmxCoopPlayer *f,
       ++cpu_wall_recovery_jumps;
       cpu_wall_recovery_left_slide=false;
       cpu_wall_recovery_phase=MMX_CPU_WALL_PUSH;
-      cpu_wall_recovery_ticks=cpu_tall_wall_climb ? 1 : 4;
-      cpu_wall_jump_hold_frames=17;
+      if (cpu_tall_wall_climb) {
+        cpu_tall_wall_kick_x=(uint16_t)word(f->body+5);
+        cpu_tall_wall_kick_y=(uint16_t)word(f->body+8);
+        cpu_tall_wall_trace_ticks=0;
+      }
+      cpu_wall_recovery_ticks=cpu_tall_wall_climb ? 0 : 4;
+      cpu_wall_jump_hold_frames=cpu_tall_wall_climb ? 5 : 17;
       if (getenv("MMX_CPU_TRACE"))
         fprintf(stderr,"[cpu-wall] buffered kick confirmed %u/%u action=18 frame=%d\n",
                 (unsigned)cpu_wall_recovery_jumps,max_kicks,snes_frame_counter);
@@ -936,11 +945,19 @@ static uint16_t cpu_companion_wall_recovery(const MmxCoopPlayer *f,
     ++cpu_wall_recovery_jumps;
     cpu_wall_recovery_left_slide=false;
     cpu_wall_recovery_phase=MMX_CPU_WALL_PUSH;
+    if (cpu_tall_wall_climb) {
+      cpu_tall_wall_kick_x=(uint16_t)word(f->body+5);
+      cpu_tall_wall_kick_y=(uint16_t)word(f->body+8);
+      cpu_tall_wall_trace_ticks=0;
+    }
     /* A long climb needs to get back to its wall quickly. One kick-off
      * frame creates a clean release, then hold INTO the same wall while
      * still rising; otherwise Zero drifts away and lands back at the base. */
-    cpu_wall_recovery_ticks=cpu_tall_wall_climb ? 1 : 4;
-    cpu_wall_jump_hold_frames=18;
+    cpu_wall_recovery_ticks=cpu_tall_wall_climb ? 0 : 4;
+    /* A wall kick supplies its own horizontal push; hold INTO the wall
+     * early rather than adding away momentum. A shorter B hold also
+     * prepares the next fresh jump edge while climbing. */
+    cpu_wall_jump_hold_frames=cpu_tall_wall_climb ? 6 : 18;
     if (getenv("MMX_CPU_TRACE"))
       fprintf(stderr,"[cpu-wall] jump=%u/%u frame=%d dir=%d tall=%d best_y=%u start_y=%u\n",
               (unsigned)cpu_wall_recovery_jumps,max_kicks,
@@ -975,7 +992,9 @@ static uint16_t cpu_companion_wall_recovery(const MmxCoopPlayer *f,
    * Continue to steer away briefly, then back toward the same wall. */
   uint16_t steer=toward;
   if (cpu_wall_recovery_phase==MMX_CPU_WALL_PUSH) {
-    steer=away;
+    /* Native wall-kick already provides a strong push-off.
+     * Pressing AWAY again prevented high-wall reattachment. */
+    steer=cpu_tall_wall_climb ? toward : away;
     if (cpu_wall_recovery_ticks) --cpu_wall_recovery_ticks;
     if (!cpu_wall_recovery_ticks) {
       cpu_wall_recovery_phase=MMX_CPU_WALL_RETURN;
@@ -1074,6 +1093,8 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
     cpu_wall_recovery_left_slide=cpu_wall_buffer_pending=cpu_wall_buffer_attempted=false;
     cpu_wall_jump_hold_frames=0;
     cpu_tall_wall_climb=false;cpu_tall_wall_start_y=cpu_tall_wall_best_y=0;
+    cpu_tall_wall_trace_ticks=0;
+    cpu_tall_wall_kick_x=cpu_tall_wall_kick_y=0;
     cpu_wall_direction=0;
     cpu_jump_cooldown_frames=0;
   }
@@ -1098,6 +1119,9 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
       cpu_tall_wall_climb=(leader->body[0x2b]&4)!=0 &&
           ((int)word(leader->body+8) <= y-96);
       cpu_tall_wall_start_y=cpu_tall_wall_best_y=(uint16_t)y;
+      cpu_tall_wall_trace_ticks=0;
+      cpu_tall_wall_kick_x=(uint16_t)x;
+      cpu_tall_wall_kick_y=(uint16_t)y;
       if (getenv("MMX_CPU_TRACE"))
         fprintf(stderr,"[cpu-wall] contact dir=%d action=%u vy=%d slide=%d tall=%d leader_above=%d\n",
                 (int)cpu_wall_direction,(unsigned)follower->body[2],
@@ -1107,7 +1131,29 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
     if (cpu_tall_wall_climb && y<(int)cpu_tall_wall_best_y)
       cpu_tall_wall_best_y=(uint16_t)y;
     bool near=cpu_companion_wall_jump_near(ram,x,y,cpu_wall_direction);
-    return cpu_companion_wall_recovery(follower,wall_slide,near,descending);
+    uint16_t wall_input=cpu_companion_wall_recovery(
+        follower,wall_slide,near,descending);
+    if (cpu_tall_wall_climb && getenv("MMX_CPU_TRACE") &&
+        cpu_wall_recovery_jumps && cpu_tall_wall_trace_ticks<48) {
+      unsigned tick=cpu_tall_wall_trace_ticks++;
+      if (tick%3==0 || wall_slide) {
+        fprintf(stderr,
+            "[cpu-climb] t=%u x=%d y=%d kickx=%u kicky=%u offx=%d rise=%d action=%u vy=%d slide=%d wallL=%d wallR=%d input=%c%c hold=%u kicks=%u\n",
+            tick,x,y,(unsigned)cpu_tall_wall_kick_x,
+            (unsigned)cpu_tall_wall_kick_y,
+            x-(int)cpu_tall_wall_kick_x,
+            (int)cpu_tall_wall_kick_y-y,
+            (unsigned)follower->body[2],
+            (int16_t)word(follower->body+0x1c),(int)wall_slide,
+            (int)cpu_companion_wall_jump_near(ram,x,y,-1),
+            (int)cpu_companion_wall_jump_near(ram,x,y,1),
+            (wall_input&MMX_CPU_LEFT)?'L':(wall_input&MMX_CPU_RIGHT)?'R':'-',
+            (wall_input&MMX_CPU_JUMP)?'B':'-',
+            (unsigned)cpu_wall_jump_hold_frames,
+            (unsigned)cpu_wall_recovery_jumps);
+      }
+    }
+    return wall_input;
   }
   /* Preserve takeoff direction and hold B long enough for a useful ascent,
    * even if P1 changes direction while the CPU is already jumping. */
