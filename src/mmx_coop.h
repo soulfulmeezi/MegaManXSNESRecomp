@@ -67,6 +67,8 @@ static inline void MmxCoopImportLegacy(MmxCoopState *out, const uint8_t *bytes) 
 /* The trusted co-op plugin prepares the owner-supplied X3 ROM, then enables
  * the chosen roster. This mode excludes single-player character exchange. */
 bool MmxCoopEnable(unsigned p1_character);
+/* Host-only option: synthesize P2 gamepad input during local co-op. */
+void MmxCoopSetCpuCompanion(bool active);
 void MmxCoopDisable(void);
 bool MmxCoopEnabled(void);
 void MmxCoopReset(void);
