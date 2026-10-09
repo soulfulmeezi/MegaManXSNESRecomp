@@ -33,6 +33,8 @@ extern int snes_frame_counter;
 static MmxCoopState state = {.players = {{.character = MMX_COOP_X}, {.character = MMX_COOP_ZERO}}};
 static bool enabled;
 static bool cpu_companion; /* Opt-in local mode; never stored in guest save state. */
+static uint8_t cpu_jump_hold_frames, cpu_jump_cooldown_frames;
+static int8_t cpu_jump_direction;
 static unsigned starting_character;
 _Static_assert(sizeof(MmxCoopPlayer) == 2276, "Co-op player save ABI");
 _Static_assert(sizeof(MmxCoopState) == 4664, "Co-op save ABI");
@@ -319,6 +321,7 @@ bool MmxCoopEnabled(void) { return enabled; }
 static void shot_ghost_reset(void);
 static void lift_reset(void);
 void MmxCoopReset(void) {
+  cpu_jump_hold_frames=cpu_jump_cooldown_frames=0;cpu_jump_direction=0;
   platform_entry.valid=false;lift_reset();shot_ghost_reset();
   MmxCoopViewsResetWorld();
   MmxWeaponsCameraQuery(enabled?weapon_view:NULL);
@@ -337,7 +340,12 @@ bool MmxCoopEnable(unsigned character) {
   starting_character = character; enabled = true; MmxCoopReset(); return true;
 }
 void MmxCoopDisable(void) { enabled = false; cpu_companion = false; starting_character = 0; MmxCoopReset(); }
-void MmxCoopSetCpuCompanion(bool active) { cpu_companion = active; }
+void MmxCoopSetCpuCompanion(bool active) {
+  if (cpu_companion!=active) {
+    cpu_jump_hold_frames=cpu_jump_cooldown_frames=0;cpu_jump_direction=0;
+  }
+  cpu_companion=active;
+}
 MmxCoopState MmxCoopGetState(void) { return state; }
 bool MmxCoopValidState(const MmxCoopState *s) {
   if (!s || s->initialized > 1 || s->current > 1 || s->controller_pass > 2 ||
@@ -605,36 +613,66 @@ static bool cpu_companion_enemy_ahead(const uint8_t *r, int x, int y, int direct
   }
   return false;
 }
-/* Feed native co-op gamepad inputs, never write the character's coordinates.
- * The ground-ahead check triggers on a walkable edge while still grounded:
- * the game's jump physics then decide whether Zero clears the pit. */
+/* Feed native co-op gamepad input rather than moving sprites directly.
+ * X1/X3 jump height depends on holding B while rising. Releasing B on the
+ * first airborne frame makes tiny hops and can repeatedly restart a jump at
+ * ledges. Keep the jump held for 12 subsequent ticks, then explicitly release
+ * it and impose a cooldown before another attempt. This is offline-only host
+ * state and is reset on mode changes/stage initialization; it never modifies
+ * the frozen co-op save ABI. */
 static uint16_t cpu_companion_input(const uint8_t *ram) {
   const MmxCoopPlayer *leader = &state.players[0], *follower = &state.players[1];
   if (!ram || !state.initialized || state.menu_owner || state.scene_owner ||
       state.stage_pending || leader->status != MMX_COOP_ALIVE ||
       follower->status != MMX_COOP_ALIVE ||
-      !(leader->body[0x27] & 127) || !(follower->body[0x27] & 127))
+      !(leader->body[0x27] & 127) || !(follower->body[0x27] & 127)) {
+    cpu_jump_hold_frames=cpu_jump_cooldown_frames=0;cpu_jump_direction=0;
     return 0;
+  }
   int dx = (int)word(leader->body+5) - (int)word(follower->body+5);
   int direction = dx>40 ? 1 : dx< -40 ? -1 : 0;
   int x=(int)word(follower->body+5), y=(int)word(follower->body+8);
   uint16_t input = direction>0 ? MMX_CPU_RIGHT : direction<0 ? MMX_CPU_LEFT : 0;
+  if (cpu_jump_cooldown_frames) --cpu_jump_cooldown_frames;
+  /* Preserve the takeoff direction while B is held, including if the leader
+   * briefly enters the 40-pixel follow dead zone during the jump. */
+  if (cpu_jump_hold_frames) {
+    --cpu_jump_hold_frames;
+    input=cpu_jump_direction>0 ? MMX_CPU_RIGHT : MMX_CPU_LEFT;
+    return input|MMX_CPU_JUMP; /* No firing during initial jump animation. */
+  }
   /* Use travel direction when closing a gap; otherwise aim in the native
    * facing direction ($0C11 bit 6, projected to body[0x69]). */
   int facing=direction ? direction : (follower->body[0x69]&64 ? 1 : -1);
-  /* Pulse the normal shoot button every 12 world ticks; a held button
-   * charges Zero's weapon instead of creating repeatable press edges. */
+  /* Brief Y taps retain the X3 buster's own attack/cooldown semantics. */
   if (ram[0xb9c]%12==0 && cpu_companion_enemy_ahead(ram,x,y,facing))
     input|=MMX_CPU_FIRE;
-  /* $0BD3 bit 2 indicates ground contact. Release jump while airborne so
-   * the next landing can generate a fresh press edge. */
+
   if (!(follower->body[0x2b] & 4) || !direction) return input;
   int ahead=x+direction*28, feet=y+16;
   bool at_edge=cpu_companion_supported(ram,x,feet) &&
       !cpu_companion_supported(ram,ahead,feet);
   bool leader_higher=(int)word(leader->body+8) < y-24 && abs(dx)<144;
-  if (at_edge || leader_higher) input|=MMX_CPU_JUMP;
-  return input;
+  if (!at_edge && !leader_higher) return input;
+  /* A solid ceiling can cancel the native takeoff and cause repeated head
+   * bumps. With no clearance or during cooldown, wait at a detected edge
+   * rather than walk the companion directly into a pit. */
+  bool headroom=true;
+  for (int offset=-6;offset<=6;offset+=6) {
+    if (MmxWeaponsTerrainSolid(ram,x+offset,y-25,false,NULL) ||
+        MmxWeaponsTerrainSolid(ram,x+offset,y-35,false,NULL)) {
+      headroom=false;break;
+    }
+  }
+  if (!headroom || cpu_jump_cooldown_frames) {
+    if (at_edge) input&=(uint16_t)~(MMX_CPU_LEFT|MMX_CPU_RIGHT);
+    return input;
+  }
+  cpu_jump_hold_frames=12;
+  cpu_jump_cooldown_frames=48;
+  cpu_jump_direction=(int8_t)direction;
+  /* Prioritize native jump over a buster attack on the takeoff frame. */
+  return (input & (uint16_t)~MMX_CPU_FIRE)|MMX_CPU_JUMP;
 }
 void MmxCoopPoll(uint16_t p1, uint16_t p2) {
   if (!enabled) return;
