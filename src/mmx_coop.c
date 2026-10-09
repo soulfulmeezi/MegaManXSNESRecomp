@@ -579,7 +579,8 @@ bool MmxCoopFrameTick(uint8_t *r) {
 /* Offline companion controls are the 12-bit SNES pad masks. Use explicit
  * constants here: this module does not include the host UI's SNES_PAD_* macros. */
 enum {
-  MMX_CPU_JUMP = 1u << 0, MMX_CPU_LEFT = 1u << 6, MMX_CPU_RIGHT = 1u << 7
+  MMX_CPU_JUMP = 1u << 0, MMX_CPU_FIRE = 1u << 1,
+  MMX_CPU_LEFT = 1u << 6, MMX_CPU_RIGHT = 1u << 7
 };
 /* Both X and Zero stand about 16 pixels above their feet. Probe several pixels
  * below the feet so a small step down does not register as a bottomless pit.
@@ -588,6 +589,20 @@ enum {
 static bool cpu_companion_supported(const uint8_t *ram, int x, int feet) {
   for (int depth=0; depth<=20; depth+=4)
     if (MmxWeaponsTerrainSolid(ram,x,feet+depth,true,NULL)) return true;
+  return false;
+}
+/* Enemy bodies occupy $0E68..$1227, one 64-byte record per slot.
+ * Choose a living target roughly level with the companion and in the current
+ * travel/facing direction. Avoid attacking every decorative/scripted object.
+ * Shots are brief Y-button taps rather than holding charge indefinitely.
+ * This is deliberately simple; visibility/obstacle-aware aiming is future work. */
+static bool cpu_companion_enemy_ahead(const uint8_t *r, int x, int y, int direction) {
+  if (!direction) return false;
+  for (unsigned d=0xe68;d<0x1228;d+=64) {
+    if (!r[d] || !r[d+14] || !(r[d+0x27]&127)) continue;
+    int dx=(int)word(r+d+5)-x, dy=(int)word(r+d+8)-y;
+    if (dx*direction>=12 && dx*direction<=152 && abs(dy)<=40) return true;
+  }
   return false;
 }
 /* Feed native co-op gamepad inputs, never write the character's coordinates.
@@ -602,13 +617,18 @@ static uint16_t cpu_companion_input(const uint8_t *ram) {
     return 0;
   int dx = (int)word(leader->body+5) - (int)word(follower->body+5);
   int direction = dx>40 ? 1 : dx< -40 ? -1 : 0;
-  if (!direction) return 0; /* Stay put inside the follow-distance dead zone. */
-
-  uint16_t input = direction>0 ? MMX_CPU_RIGHT : MMX_CPU_LEFT;
-  /* $0BD3 bit 2 indicates ground contact. Release jump while airborne so the
-   * next landing can generate a fresh press edge through MmxCoopPoll. */
-  if (!(follower->body[0x2b] & 4)) return input;
   int x=(int)word(follower->body+5), y=(int)word(follower->body+8);
+  uint16_t input = direction>0 ? MMX_CPU_RIGHT : direction<0 ? MMX_CPU_LEFT : 0;
+  /* Use travel direction when closing a gap; otherwise aim in the native
+   * facing direction ($0C11 bit 6, projected to body[0x69]). */
+  int facing=direction ? direction : (follower->body[0x69]&64 ? 1 : -1);
+  /* Pulse the normal shoot button every 12 world ticks; a held button
+   * charges Zero's weapon instead of creating repeatable press edges. */
+  if (ram[0xb9c]%12==0 && cpu_companion_enemy_ahead(ram,x,y,facing))
+    input|=MMX_CPU_FIRE;
+  /* $0BD3 bit 2 indicates ground contact. Release jump while airborne so
+   * the next landing can generate a fresh press edge. */
+  if (!(follower->body[0x2b] & 4) || !direction) return input;
   int ahead=x+direction*28, feet=y+16;
   bool at_edge=cpu_companion_supported(ram,x,feet) &&
       !cpu_companion_supported(ram,ahead,feet);
