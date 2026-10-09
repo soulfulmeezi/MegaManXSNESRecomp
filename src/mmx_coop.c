@@ -373,6 +373,7 @@ static void cpu_companion_reset_motion(void) {
   cpu_tall_wall_trace_ticks=0;
   cpu_jump_direction=cpu_wall_direction=0;
   cpu_stall_ticks=0;cpu_last_x=0;cpu_stall_direction=0;
+  cpu_zero_melee_cooldown=0;cpu_zero_dash_was_active=false;
 }
 void MmxCoopReset(void) {
   cpu_companion_reset_motion();cpu_human_seat=cpu_swap_trigger_down=cpu_rescue_cooldown=0;
@@ -651,6 +652,13 @@ enum {
   MMX_CPU_LEFT = 1u << 6, MMX_CPU_RIGHT = 1u << 7,
   MMX_CPU_DASH = 1u << 8
 };
+/* X3 Zero is charge-capable: his own MmxZeroPlayerTick increments charge
+ * while Y is HELD and fires on release. Modern Zero replaces that buster
+ * with a direct saber and has his own shorter melee attack cadence.
+ * Keep this CPU-only selection outside the traversal paths: wall/jump
+ * returns otherwise bypass attack decisions on nearly every busy tick. */
+static uint8_t cpu_zero_melee_cooldown;
+static bool cpu_zero_dash_was_active;
 enum {
   MMX_CPU_WALL_IDLE, MMX_CPU_WALL_SEEK, MMX_CPU_WALL_PUSH,
   MMX_CPU_WALL_RETURN, MMX_CPU_WALL_FINISHED
@@ -856,6 +864,81 @@ static bool cpu_companion_enemy_ahead(const uint8_t *r, int x, int y, int direct
     if (dx*direction>=12 && dx*direction<=152 && abs(dy)<=40) return true;
   }
   return false;
+}
+/* Modern saber reach is short; a regular buster can address enemies
+ * across far more of the shared screen. Use game object collision data
+ * instead of firing at any decorative/scripted sprite. */
+static bool cpu_companion_enemy_melee(const uint8_t *r,int x,int y,int dir) {
+  if (!r || !dir) return false;
+  for (unsigned d=0xe68;d<0x1228;d+=64) {
+    if (!r[d] || !r[d+14] || !(r[d+0x27]&127)) continue;
+    int dx=(int)word(r+d+5)-x,dy=(int)word(r+d+8)-y;
+    if (dx*dir>=0 && dx*dir<=56 && abs(dy)<=36) return true;
+  }
+  return false;
+}
+/* Highest-priority native motion is decided by cpu_companion_input() before
+ * this attack/dash postprocessor. Holding charge never overrides jump or
+ * wall-recovery directions, and any charged blast waits until a safe time
+ * when the native weapon can fire. */
+static uint16_t cpu_companion_zero_combat(const uint8_t *r,
+                                          const MmxCoopPlayer *f,
+                                          const MmxCoopPlayer *leader,
+                                          uint16_t input) {
+  if (!r || !f || !leader || f->character!=MMX_COOP_ZERO ||
+      f->status!=MMX_COOP_ALIVE || !(f->body[0x27]&127) ||
+      f->body[2]==12) return input;
+  int x=(int)word(f->body+5),y=(int)word(f->body+8);
+  int dx=(int)word(leader->body+5)-x;
+  int dir=(input&MMX_CPU_RIGHT) ? 1 : (input&MMX_CPU_LEFT) ? -1 :
+          (f->body[0x69]&64 ? 1 : -1);
+  bool target=cpu_companion_enemy_ahead(r,x,y,dir);
+  bool recovering=cpu_wall_recovery_phase!=MMX_CPU_WALL_IDLE;
+  if (f->zero.modern.enabled) {
+    /* Modern mode: direct saber, not a chargeable X3 buster. */
+    input&=(uint16_t)~MMX_CPU_FIRE;
+    if (cpu_zero_melee_cooldown) --cpu_zero_melee_cooldown;
+    if (!recovering && !cpu_zero_melee_cooldown &&
+        cpu_companion_enemy_melee(r,x,y,dir)) {
+      input|=MMX_CPU_FIRE;
+      cpu_zero_melee_cooldown=22;
+    }
+  } else {
+    /* X3 mode: build a powerful shot while running and jumping. Fire on
+     * release only if an enemy is in front AND the native player isn't
+     * busy with a wall-recovery or an earlier charged burst. With no
+     * target, hold a full ready charge rather than waste it at empty air. */
+    bool ready=f->zero.charge>=141;
+    bool busy=f->zero.burst || f->zero.slash || f->zero.combo ||
+              f->zero.swap_phase;
+    if (ready && target && !recovering && !busy) {
+      input&=(uint16_t)~MMX_CPU_FIRE;
+      if (getenv("MMX_CPU_TRACE"))
+        fprintf(stderr,"[cpu-attack] Zero X3 charged release charge=%u x=%d y=%d\n",
+                (unsigned)f->zero.charge,x,y);
+    } else input|=MMX_CPU_FIRE;
+  }
+  /* Ground dash on VERIFIED clear terrain for fast catching up, including
+   * run-up toward a far raised climb. The native game decides the actual
+   * dash speed and animation; never force dash across an unverified gap
+   * or through a solid wall. Air dash is exclusively Modern mode and
+   * requires separate terrain-safe flight planning. */
+  bool safe_dash=false;
+  if ((f->body[0x2b]&4) && dx*dir>112 &&
+      (input&(dir>0?MMX_CPU_RIGHT:MMX_CPU_LEFT)) &&
+      cpu_companion_supported(r,x,y+16) &&
+      cpu_companion_supported(r,x+dir*28,y+16) &&
+      cpu_companion_supported(r,x+dir*48,y+16) &&
+      !cpu_companion_obstacle_ahead(r,x,y,dir) &&
+      !cpu_companion_enemy_melee(r,x,y,dir)) {
+    input|=MMX_CPU_DASH;
+    safe_dash=true;
+  }
+  if (safe_dash && !cpu_zero_dash_was_active && getenv("MMX_CPU_TRACE"))
+    fprintf(stderr,"[cpu-dash] Zero ground dash x=%d y=%d leader_dx=%d\n",
+            x,y,dx);
+  cpu_zero_dash_was_active=safe_dash;
+  return input;
 }
 /* A physical wall can be contacted during air action 6/8 before the
  * native wall-slide action 0x10 appears. Prepare recovery by steering INTO
@@ -1398,7 +1481,13 @@ void MmxCoopPoll(uint16_t p1, uint16_t p2) {
     }
     cpu_swap_trigger_down=held;
     inputs[cpu_human_seat]=p1&4095;
-    inputs[cpu_human_seat^1]=cpu_companion_input(g_ram,cpu_human_seat,p1);
+    unsigned ai=cpu_human_seat^1;
+    inputs[ai]=cpu_companion_input(g_ram,cpu_human_seat,p1);
+    if (state.initialized && !state.menu_owner && !state.scene_owner &&
+        !state.stage_pending)
+      inputs[ai]=cpu_companion_zero_combat(g_ram,&state.players[ai],
+                                           &state.players[cpu_human_seat],
+                                           inputs[ai]);
   } else {
     cpu_swap_trigger_down=0;
   }
