@@ -839,6 +839,26 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
              (leader_pad&MMX_CPU_LEFT) && !(leader_pad&MMX_CPU_RIGHT) ? -1 : 0;
   if (intent && (dx*intent)<-40 && abs(dx)<=176) direction=intent;
   int x=(int)word(follower->body+5),y=(int)word(follower->body+8);
+  /* Horizontal follow reaches its dead zone even when P1 is standing on
+   * a high platform. Search BOTH sides for an actual close wall before
+   * choosing a route: this is not a reaction to P1's B/jump input.
+   * Run ahead of the early !direction exit below. */
+  bool elevated_goal=(int)word(leader->body+8)<y-48;
+  bool climb_from_below=false;
+  int climb_face=0;
+  if (!direction && elevated_goal) {
+    int right=cpu_companion_wall_face(ram,x,y+16,1);
+    int left=cpu_companion_wall_face(ram,x,y+16,-1);
+    /* Don't start crossing a distant gap merely because a wall exists
+     * somewhere far away. Use a wall within 80 native stage pixels. */
+    if (right>80) right=0;
+    if (left>80) left=0;
+    direction=MmxCoopCpuChooseClimbDirection(dx,right,left);
+    if (direction) {
+      climb_from_below=true;
+      climb_face=direction>0 ? right : left;
+    }
+  }
   bool grounded=(follower->body[0x2b]&4)!=0;
   bool wall_slide=!grounded && follower->body[2]==0x10;
   /* Detect genuine obstruction by observing lack of horizontal progress
@@ -897,6 +917,17 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
   if (ram[0xb9c]%12==0 && cpu_companion_enemy_ahead(ram,x,y,facing))
     input|=MMX_CPU_FIRE;
 
+  if ((!direction || !grounded) && getenv("MMX_CPU_TRACE")) {
+    static int last_idle_trace=-1000;
+    if (snes_frame_counter-last_idle_trace>=120) {
+      fprintf(stderr,
+          "[cpu-state] x=%d y=%d dx=%d dir=%d high=%d climb_side=%d action=%u grounded=%d recovery=%u\n",
+          x,y,dx,direction,(int)elevated_goal,(int)climb_from_below,
+          (unsigned)follower->body[2],(int)grounded,
+          (unsigned)cpu_wall_recovery_phase);
+      last_idle_trace=snes_frame_counter;
+    }
+  }
   if (!grounded || !direction) return input;
   int feet=y+16;
   bool edge=cpu_companion_ground_missing(ram,x,feet,direction);
@@ -912,7 +943,7 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
    * after the cliff sensor fires. Once within ~48px, proactively jump at
    * the wall. At a lip, allow a longer native dash-jump approach if the
    * wall's top has a valid, walkable landing. */
-  bool high_goal=(int)word(leader->body+8)<y-48 && dx*direction>40;
+  bool high_goal=elevated_goal && (dx*direction>40 || climb_from_below);
   /* Only scan high columns when the CPU is near a gap, touching a
    * possible obstacle or has a higher destination ahead. A full-height
    * scan every ordinary walking frame needlessly burns CPU. */
@@ -920,13 +951,12 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
       cpu_companion_raised_wall(ram,x,feet,direction,&wall_distance);
   bool goal_wall=false;
   if (!raised_wall && high_goal && !short_landing) {
-    int face=cpu_companion_wall_face(ram,x,feet,direction);
-    /* The vertical destination makes this a climb route, NOT a copy of
-     * the player's jump. The face itself must be real solid collision.
-     * Up to 144px allows a controlled jump toward the near wall at
-     * the far side of a Highway gap; do not commit before reaching
-     * the lip unless Zero is already within 48px of that wall. */
-    goal_wall=face && dx*direction>face;
+    int face=climb_from_below ? climb_face :
+             cpu_companion_wall_face(ram,x,feet,direction);
+    /* High destination plus a real solid wall is an actionable route even
+     * when horizontal follow distance is zero. The wall must be within
+     * sensor range, never inferred solely from X's height. */
+    goal_wall=face && (climb_from_below || dx*direction>face);
     if (goal_wall) wall_distance=face;
   }
   bool climb_takeoff=(raised_wall || goal_wall) &&
