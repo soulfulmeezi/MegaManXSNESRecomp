@@ -36,7 +36,8 @@ static bool cpu_companion; /* Opt-in local mode; never stored in guest save stat
 static uint8_t cpu_jump_hold_frames, cpu_jump_cooldown_frames;
 static uint8_t cpu_wall_kick_cooldown, cpu_wall_push_frames;
 static uint8_t cpu_wall_return_frames;
-static uint8_t cpu_human_seat, cpu_swap_chord_down, cpu_rescue_cooldown;
+static uint8_t cpu_human_seat, cpu_swap_trigger_down, cpu_rescue_cooldown;
+static bool cpu_l2_trigger_held;
 static uint8_t cpu_stall_ticks;
 static uint16_t cpu_last_x;
 static int8_t cpu_jump_direction, cpu_wall_push_direction, cpu_stall_direction;
@@ -345,7 +346,8 @@ static void cpu_companion_reset_motion(void) {
   cpu_stall_ticks=0;cpu_last_x=0;cpu_stall_direction=0;
 }
 void MmxCoopReset(void) {
-  cpu_companion_reset_motion();cpu_human_seat=cpu_swap_chord_down=cpu_rescue_cooldown=0;
+  cpu_companion_reset_motion();cpu_human_seat=cpu_swap_trigger_down=cpu_rescue_cooldown=0;
+  cpu_l2_trigger_held=false;
   platform_entry.valid=false;lift_reset();shot_ghost_reset();
   MmxCoopViewsResetWorld();
   MmxWeaponsCameraQuery(enabled?weapon_view:NULL);
@@ -367,7 +369,8 @@ void MmxCoopDisable(void) { enabled = false; cpu_companion = false; starting_cha
 void MmxCoopSetCpuCompanion(bool active) {
   if (cpu_companion!=active) {
     cpu_companion_reset_motion();
-    cpu_human_seat=cpu_swap_chord_down=cpu_rescue_cooldown=0;
+    cpu_human_seat=cpu_swap_trigger_down=cpu_rescue_cooldown=0;
+    cpu_l2_trigger_held=false;
   }
   cpu_companion=active;
 }
@@ -793,21 +796,24 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
   cpu_jump_direction=(int8_t)direction;
   return (input&(uint16_t)~MMX_CPU_FIRE)|MMX_CPU_JUMP;
 }
+/* Real DualSense L2 is an analog trigger with no SNES pad bit; the desktop
+ * host samples it separately. Tests can drive this host-only signal too. */
+void MmxCoopSetSwitchTrigger(bool held) { cpu_l2_trigger_held=held; }
 void MmxCoopPoll(uint16_t p1, uint16_t p2) {
   if (!enabled) return;
   uint16_t inputs[2] = {p1 & 4095, p2 & 4095};
-  /* Offline CPU mode maps the physical first controller to either character.
-   * SELECT+R toggles the human-controlled seat on a new press edge; consume
-   * both buttons so the game does not also withdraw or change weapons. */
+  /* Offline CPU mode: a new press of the physical L2 analog trigger
+   * switches the controlled character. The L2 signal is NOT a SNES button,
+   * so Start/Select and native L/R weapon changes still work normally.
+   * One press swaps once; holding L2 never oscillates the active seat. */
   bool offline_cpu = cpu_companion
 #if SNESRECOMP_NET
       && !snes_netplay_active()
 #endif
       ;
   if (offline_cpu) {
-    const unsigned chord=(1u<<2)|(1u<<11);
-    bool held=(p1&chord)==chord;
-    if (held && !cpu_swap_chord_down && state.initialized &&
+    bool held=cpu_l2_trigger_held;
+    if (held && !cpu_swap_trigger_down && state.initialized &&
         !state.menu_owner && !state.scene_owner && !state.stage_pending &&
         state.players[0].status==MMX_COOP_ALIVE &&
         state.players[1].status==MMX_COOP_ALIVE &&
@@ -816,12 +822,11 @@ void MmxCoopPoll(uint16_t p1, uint16_t p2) {
       cpu_human_seat^=1;
       cpu_companion_reset_motion();
     }
-    cpu_swap_chord_down=held;
-    if (held) p1&=(uint16_t)~chord;
+    cpu_swap_trigger_down=held;
     inputs[cpu_human_seat]=p1&4095;
     inputs[cpu_human_seat^1]=cpu_companion_input(g_ram,cpu_human_seat,p1);
   } else {
-    cpu_swap_chord_down=0;
+    cpu_swap_trigger_down=0;
   }
   for (unsigned i = 0; i < 2; ++i) {
     state.players[i].pressed = inputs[i] & ~state.players[i].input;
