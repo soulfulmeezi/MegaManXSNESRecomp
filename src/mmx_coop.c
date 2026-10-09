@@ -35,11 +35,15 @@ static bool enabled;
 static bool cpu_companion; /* Opt-in local mode; never stored in guest save state. */
 static uint8_t cpu_jump_hold_frames, cpu_jump_cooldown_frames;
 static uint8_t cpu_wall_kick_cooldown, cpu_wall_push_frames;
+static uint8_t cpu_human_seat, cpu_swap_chord_down, cpu_rescue_cooldown;
 static int8_t cpu_jump_direction, cpu_wall_push_direction;
 static unsigned starting_character;
 _Static_assert(sizeof(MmxCoopPlayer) == 2276, "Co-op player save ABI");
 _Static_assert(sizeof(MmxCoopState) == 4664, "Co-op save ABI");
 static bool join_tick(uint8_t *r);
+static void place_other(uint8_t *r,uint16_t x,uint16_t y,bool preserve);
+static bool floor_below(const uint8_t *r,const uint8_t *b);
+static void cpu_companion_rescue(uint8_t *r);
 /* Registers the item routine passed into $84:AB81/AB56; see platform_hook. */
 static struct {bool valid;uint16_t d,s,a,x,y;uint8_t p,db;} platform_entry;
 /* --coop-trace: observation only; see mmx_coop_trace.h. */
@@ -327,7 +331,7 @@ static void cpu_companion_reset_motion(void) {
   cpu_jump_direction=cpu_wall_push_direction=0;
 }
 void MmxCoopReset(void) {
-  cpu_companion_reset_motion();
+  cpu_companion_reset_motion();cpu_human_seat=cpu_swap_chord_down=cpu_rescue_cooldown=0;
   platform_entry.valid=false;lift_reset();shot_ghost_reset();
   MmxCoopViewsResetWorld();
   MmxWeaponsCameraQuery(enabled?weapon_view:NULL);
@@ -347,7 +351,10 @@ bool MmxCoopEnable(unsigned character) {
 }
 void MmxCoopDisable(void) { enabled = false; cpu_companion = false; starting_character = 0; MmxCoopReset(); }
 void MmxCoopSetCpuCompanion(bool active) {
-  if (cpu_companion!=active) cpu_companion_reset_motion();
+  if (cpu_companion!=active) {
+    cpu_companion_reset_motion();
+    cpu_human_seat=cpu_swap_chord_down=cpu_rescue_cooldown=0;
+  }
   cpu_companion=active;
 }
 MmxCoopState MmxCoopGetState(void) { return state; }
@@ -570,6 +577,7 @@ bool MmxCoopFrameTick(uint8_t *r) {
   if(refill_paused(r)) return false;
   if (scene_tick(r)) return true;
   if (!state.scene_owner && join_tick(r)) return true;
+  cpu_companion_rescue(r);
   if (r[0x1f10]>=6) return false;
   unsigned phases[2]={0,0};
   for (unsigned seat=0;seat<2;++seat) if (state.players[seat].status==MMX_COOP_ALIVE &&
@@ -632,8 +640,9 @@ static bool cpu_companion_enemy_ahead(const uint8_t *r, int x, int y, int direct
 /* Feed native co-op pad input rather than moving sprites directly.
  * Offline-only host timers preserve variable-height ground jumps and allow
  * fresh B press edges for wall kicks. No co-op save ABI or netplay changes. */
-static uint16_t cpu_companion_input(const uint8_t *ram) {
-  const MmxCoopPlayer *leader=&state.players[0], *follower=&state.players[1];
+static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat) {
+  const MmxCoopPlayer *leader=&state.players[controlled_seat],
+                      *follower=&state.players[controlled_seat^1];
   if (!ram || !state.initialized || state.menu_owner || state.scene_owner ||
       state.stage_pending || leader->status!=MMX_COOP_ALIVE ||
       follower->status!=MMX_COOP_ALIVE ||
@@ -710,13 +719,33 @@ static uint16_t cpu_companion_input(const uint8_t *ram) {
 void MmxCoopPoll(uint16_t p1, uint16_t p2) {
   if (!enabled) return;
   uint16_t inputs[2] = {p1 & 4095, p2 & 4095};
-  /* Netplay keeps remote seat input authoritative, even when the local
-   * launcher has the CPU companion option selected. */
-  if (cpu_companion
+  /* Offline CPU mode maps the physical first controller to either character.
+   * SELECT+R toggles the human-controlled seat on a new press edge; consume
+   * both buttons so the game does not also withdraw or change weapons. */
+  bool offline_cpu = cpu_companion
 #if SNESRECOMP_NET
       && !snes_netplay_active()
 #endif
-  ) inputs[1] = cpu_companion_input(g_ram);
+      ;
+  if (offline_cpu) {
+    const unsigned chord=(1u<<2)|(1u<<11);
+    bool held=(p1&chord)==chord;
+    if (held && !cpu_swap_chord_down && state.initialized &&
+        !state.menu_owner && !state.scene_owner && !state.stage_pending &&
+        state.players[0].status==MMX_COOP_ALIVE &&
+        state.players[1].status==MMX_COOP_ALIVE &&
+        (state.players[0].body[0x27]&127) &&
+        (state.players[1].body[0x27]&127)) {
+      cpu_human_seat^=1;
+      cpu_companion_reset_motion();
+    }
+    cpu_swap_chord_down=held;
+    if (held) p1&=(uint16_t)~chord;
+    inputs[cpu_human_seat]=p1&4095;
+    inputs[cpu_human_seat^1]=cpu_companion_input(g_ram,cpu_human_seat);
+  } else {
+    cpu_swap_chord_down=0;
+  }
   for (unsigned i = 0; i < 2; ++i) {
     state.players[i].pressed = inputs[i] & ~state.players[i].input;
     state.players[i].input = inputs[i];
@@ -825,6 +854,35 @@ bool MmxCoopFindLanding(const uint8_t *r,uint16_t *out_x,uint16_t *out_y) {
     }
   }
   return false;
+}
+/* Speedrun-assist fallback: only save the CPU companion from a real void
+ * pit, never from enemy damage. Uses the co-op's tested collision-aware
+ * landing search near the controlled character; retains HP and inventory.
+ * Activated before native bottom-screen fatal contact, with throttling.
+ * If no safe landing exists, don't fabricate a coordinate or suppress death. */
+static void cpu_companion_rescue(uint8_t *r) {
+  if (!cpu_companion || !state.initialized || !r ||
+      state.menu_owner || state.scene_owner || state.stage_pending ||
+      r[0xd1]!=2 || r[0xd2]!=4 || r[0xd3]!=4 ||
+      r[0x1f0c] || r[0x1f23] || r[0x1f48]) return;
+  if (cpu_rescue_cooldown) {--cpu_rescue_cooldown;return;}
+  const unsigned target=cpu_human_seat^1;
+  MmxCoopPlayer *f=&state.players[target], *h=&state.players[cpu_human_seat];
+  if (f->status!=MMX_COOP_ALIVE || h->status!=MMX_COOP_ALIVE ||
+      !(f->body[0x27]&127) || !(h->body[0x27]&127) ||
+      f->body[2]==12 || h->body[2]==12) return;
+  const int bottom=(int)word(r+0x1e5c)+224;
+  if ((int)word(f->body+8)<bottom-64 || floor_below(r,f->body)) return;
+  unsigned previous=state.current;
+  if (!MmxCoopSelect(r,cpu_human_seat)) return;
+  uint16_t x=0,y=0;
+  bool safe=MmxCoopFindLanding(r,&x,&y);
+  if (safe) {
+    place_other(r,x,y,true);
+    cpu_rescue_cooldown=90;
+    cpu_companion_reset_motion();
+  }
+  MmxCoopSelect(r,previous);
 }
 static void clear_player_combat(uint8_t *r,unsigned seat) {
   MmxCoopSelect(r,seat);MmxWeaponsCancelShots(r);MmxZeroCancel(r);
@@ -2132,7 +2190,7 @@ static void controller_hook(CpuState *cpu, uint32_t pc) {
     MmxCoopInitialize(g_ram);
     diagnostic_event(g_ram,cpu,pc,"controller-enter");
     if (state.initialized && !state.controller_pass) {
-      if(state.current==1) MmxCoopApplyInput(g_ram);
+      if(state.current==1 || cpu_companion) MmxCoopApplyInput(g_ram);
       state.controller_pass=1;
       TRACE(CONTROLLER,pc,0,0,cpu);
       TRACE_MARK(state.current,CONTROLLER);
