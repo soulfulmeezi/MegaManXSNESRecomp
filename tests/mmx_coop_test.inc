@@ -1190,23 +1190,30 @@ static void coop_cpu_companion_checks(const char *fixture) {
   MmxCoopSetCpuCompanion(false);
   MmxCoopSetCpuCompanion(true);
 
-  /* Select+R switches the physical P1 controller to Zero without swapping
-   * native actor slots, whose distinct weapons and death logic must remain. */
+  /* Host-only L2 press edges switch the physical P1 pad between actors.
+   * Real L2 doesn't have a SNES bit, so this test injects analog threshold
+   * state separately, and regular weapon/menu buttons remain untouched. */
+  MmxCoopSetSwitchTrigger(false);
   MmxCoopPoll(0,0);
   MmxCoopSetCpuCompanion(true);
-  MmxCoopPoll(SNES_PAD_SELECT|SNES_PAD_R,0);
-  /* The same held chord must not switch on subsequent polls. */
-  MmxCoopPoll(SNES_PAD_SELECT|SNES_PAD_R,0);
-  MmxCoopPoll(SNES_PAD_SELECT|SNES_PAD_R,0);
+  MmxCoopSetSwitchTrigger(true);
+  MmxCoopPoll(0,0);
+  /* A held analog trigger must switch exactly once. */
+  MmxCoopPoll(0,0);
+  MmxCoopPoll(0,0);
   MmxCoopPoll(SNES_PAD_RIGHT,0);
   s=MmxCoopGetState();
   check(s.players[1].input==SNES_PAD_RIGHT,
-      "Select+R routes physical P1 input to Zero without retriggering");
-  MmxCoopPoll(SNES_PAD_SELECT|SNES_PAD_R,0);
+      "single L2 press routes P1 controller to Zero without retriggering");
+  MmxCoopSetSwitchTrigger(false);
+  MmxCoopPoll(0,0);
+  MmxCoopSetSwitchTrigger(true);
+  MmxCoopPoll(0,0);
   MmxCoopPoll(SNES_PAD_LEFT,0);
   s=MmxCoopGetState();
   check(s.players[0].input==SNES_PAD_LEFT,
-      "second Select+R routes physical P1 input back to X");
+      "second L2 press routes P1 controller back to X");
+  MmxCoopSetSwitchTrigger(false);
   MmxCoopSetCpuCompanion(false);
   MmxCoopPoll(0,SNES_PAD_LEFT);s=MmxCoopGetState();
   check(s.players[1].input==SNES_PAD_LEFT,
