@@ -913,7 +913,11 @@ static uint16_t cpu_companion_zero_combat(const uint8_t *r,
     bool ready=f->zero.charge>=141;
     bool busy=f->zero.burst || f->zero.slash || f->zero.combo ||
               f->zero.swap_phase;
-    if (ready && target && !recovering && !busy) {
+    if (ready && target && !recovering && !busy &&
+        (f->input&MMX_CPU_FIRE)) {
+      /* Native X3 fires on RELEASE, not on a continuous unheld pad.
+       * If a charge release was suppressed by an action/animation, rearm
+       * Y for one tick so we can try again with a real input edge. */
       input&=(uint16_t)~MMX_CPU_FIRE;
       if (getenv("MMX_CPU_TRACE"))
         fprintf(stderr,"[cpu-attack] Zero X3 charged release charge=%u x=%d y=%d\n",
