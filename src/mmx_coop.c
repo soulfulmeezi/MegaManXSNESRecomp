@@ -905,14 +905,14 @@ static uint16_t cpu_companion_wall_recovery(const MmxCoopPlayer *f,
       cpu_wall_recovery_ticks=4;
       cpu_wall_jump_hold_frames=17;
       if (getenv("MMX_CPU_TRACE"))
-        fprintf(stderr,"[cpu-wall] buffered kick confirmed %u/2 action=18 frame=%d\\n",
+        fprintf(stderr,"[cpu-wall] buffered kick confirmed %u/2 action=18 frame=%d\n",
                 (unsigned)cpu_wall_recovery_jumps,snes_frame_counter);
       return away|MMX_CPU_JUMP;
     }
     /* Native code did not accept the buffer. Release B to re-arm the
      * next opportunity; do not spend a jump or wait for a cooldown. */
     if (getenv("MMX_CPU_TRACE"))
-      fprintf(stderr,"[cpu-wall] buffered press not accepted action=%u frame=%d\\n",
+      fprintf(stderr,"[cpu-wall] buffered press not accepted action=%u frame=%d\n",
               (unsigned)f->body[2],snes_frame_counter);
     return toward;
   }
@@ -932,7 +932,7 @@ static uint16_t cpu_companion_wall_recovery(const MmxCoopPlayer *f,
     cpu_wall_recovery_ticks=4;
     cpu_wall_jump_hold_frames=18;
     if (getenv("MMX_CPU_TRACE"))
-      fprintf(stderr,"[cpu-wall] jump=%u/2 first-eligible-slide frame=%d dir=%d\\n",
+      fprintf(stderr,"[cpu-wall] jump=%u/2 first-eligible-slide frame=%d dir=%d\n",
               (unsigned)cpu_wall_recovery_jumps,
               snes_frame_counter,(int)cpu_wall_direction);
     return toward|MMX_CPU_JUMP;
@@ -949,13 +949,12 @@ static uint16_t cpu_companion_wall_recovery(const MmxCoopPlayer *f,
     cpu_wall_buffer_attempted=true;
     cpu_wall_buffer_pending=true;
     if (getenv("MMX_CPU_TRACE"))
-      fprintf(stderr,"[cpu-wall] buffered near-wall B action=%u frame=%d\\n",
+      fprintf(stderr,"[cpu-wall] buffered near-wall B action=%u frame=%d\n",
               (unsigned)f->body[2],snes_frame_counter);
     return toward|MMX_CPU_JUMP;
   }
 
-  if (cpu_wall_recovery_jumps>=2) {
-    cpu_wall_jump_hold_frames=0;
+  if (cpu_wall_recovery_jumps>=2 && !cpu_wall_jump_hold_frames) {
     cpu_wall_recovery_phase=MMX_CPU_WALL_FINISHED;
     return toward;
   }
