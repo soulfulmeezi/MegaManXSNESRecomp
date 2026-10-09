@@ -951,9 +951,18 @@ static uint16_t cpu_companion_wall_recovery(const MmxCoopPlayer *f,
   /* If Zero is sliding and B is still held from the kick ascent, release
    * it NOW; next frame is the earliest possible new B press edge. The
    * original 4+9-frame steering timers never delay a reattached slide. */
-  if (wall_slide && cpu_wall_recovery_left_slide &&
-      (f->input&MMX_CPU_JUMP)) {
+  if (wall_slide && (f->input&MMX_CPU_JUMP) &&
+      (cpu_wall_recovery_jumps==0 || cpu_wall_recovery_left_slide)) {
+    /* Native wall jumps are EDGE-triggered. This matters on the very
+     * FIRST contact too: an ordinary ground jump can still hold B when
+     * Zero enters action $10. Writing B again would not generate a new
+     * press and the old code counted a nonexistent kick. Release once,
+     * keep contact, then press on the next truly eligible native frame. */
     cpu_wall_jump_hold_frames=0;
+    if (getenv("MMX_CPU_TRACE"))
+      fprintf(stderr,"[cpu-wall] rearm B before kick=%u action=%u frame=%d\n",
+              (unsigned)(cpu_wall_recovery_jumps+1),
+              (unsigned)f->body[2],snes_frame_counter);
     return toward;
   }
   if (wall_slide && cpu_wall_recovery_jumps<max_kicks &&
