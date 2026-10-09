@@ -576,20 +576,45 @@ bool MmxCoopFrameTick(uint8_t *r) {
   if (frozen) r[0xb9d]=r[0xba0]=0;
   return frozen;
 }
-/* First local companion milestone: keep seat 2 near seat 1 by feeding the
- * native co-op controller, not by teleporting or moving sprites directly.
- * Later milestones will add terrain-aware jumps, attacks and character swap.
- * This deliberately reads only serialized gameplay state (deterministic). */
-static uint16_t cpu_companion_input(void) {
+/* Offline companion controls are the 12-bit SNES pad masks. Use explicit
+ * constants here: this module does not include the host UI's SNES_PAD_* macros. */
+enum {
+  MMX_CPU_JUMP = 1u << 0, MMX_CPU_LEFT = 1u << 6, MMX_CPU_RIGHT = 1u << 7
+};
+/* Both X and Zero stand about 16 pixels above their feet. Probe several pixels
+ * below the feet so a small step down does not register as a bottomless pit.
+ * A probe is terrain only; moving platforms and scripted geometry need a
+ * separate later pass. The game's actual collision map is queried live. */
+static bool cpu_companion_supported(const uint8_t *ram, int x, int feet) {
+  for (int depth=0; depth<=20; depth+=4)
+    if (MmxWeaponsTerrainSolid(ram,x,feet+depth,true,NULL)) return true;
+  return false;
+}
+/* Feed native co-op gamepad inputs, never write the character's coordinates.
+ * The ground-ahead check triggers on a walkable edge while still grounded:
+ * the game's jump physics then decide whether Zero clears the pit. */
+static uint16_t cpu_companion_input(const uint8_t *ram) {
   const MmxCoopPlayer *leader = &state.players[0], *follower = &state.players[1];
-  if (!state.initialized || state.menu_owner || state.scene_owner || state.stage_pending ||
-      leader->status != MMX_COOP_ALIVE || follower->status != MMX_COOP_ALIVE ||
+  if (!ram || !state.initialized || state.menu_owner || state.scene_owner ||
+      state.stage_pending || leader->status != MMX_COOP_ALIVE ||
+      follower->status != MMX_COOP_ALIVE ||
       !(leader->body[0x27] & 127) || !(follower->body[0x27] & 127))
     return 0;
-  int dx = (int)word(leader->body + 5) - (int)word(follower->body + 5);
-  if (dx > 40) return SNES_PAD_RIGHT;
-  if (dx < -40) return SNES_PAD_LEFT;
-  return 0;
+  int dx = (int)word(leader->body+5) - (int)word(follower->body+5);
+  int direction = dx>40 ? 1 : dx< -40 ? -1 : 0;
+  if (!direction) return 0; /* Stay put inside the follow-distance dead zone. */
+
+  uint16_t input = direction>0 ? MMX_CPU_RIGHT : MMX_CPU_LEFT;
+  /* $0BD3 bit 2 indicates ground contact. Release jump while airborne so the
+   * next landing can generate a fresh press edge through MmxCoopPoll. */
+  if (!(follower->body[0x2b] & 4)) return input;
+  int x=(int)word(follower->body+5), y=(int)word(follower->body+8);
+  int ahead=x+direction*28, feet=y+16;
+  bool at_edge=cpu_companion_supported(ram,x,feet) &&
+      !cpu_companion_supported(ram,ahead,feet);
+  bool leader_higher=(int)word(leader->body+8) < y-24 && abs(dx)<144;
+  if (at_edge || leader_higher) input|=MMX_CPU_JUMP;
+  return input;
 }
 void MmxCoopPoll(uint16_t p1, uint16_t p2) {
   if (!enabled) return;
@@ -600,7 +625,7 @@ void MmxCoopPoll(uint16_t p1, uint16_t p2) {
 #if SNESRECOMP_NET
       && !snes_netplay_active()
 #endif
-  ) inputs[1] = cpu_companion_input();
+  ) inputs[1] = cpu_companion_input(g_ram);
   for (unsigned i = 0; i < 2; ++i) {
     state.players[i].pressed = inputs[i] & ~state.players[i].input;
     state.players[i].input = inputs[i];
