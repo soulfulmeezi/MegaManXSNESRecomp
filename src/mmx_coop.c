@@ -678,15 +678,46 @@ static bool cpu_companion_landing(const uint8_t *ram,int x,int feet) {
   }
   return false;
 }
-static bool cpu_companion_gap_reachable(const uint8_t *ram,int x,int feet,int direction) {
-  /* A normal jump without dash has limited horizontal reach. Requiring
-   * support 40..96px ahead avoids launching toward endless empty space.
-   * Longer jumps can be added once dash-jump trajectories are modelled. */
-  for (int distance=40;distance<=96;distance+=8) {
-    int landing_x=x+direction*distance;
-    if (cpu_companion_landing(ram,landing_x,feet) &&
-        !MmxWeaponsTerrainSolid(ram,landing_x,feet-28,false,NULL))
+/* Look ahead for a safe floor at a different elevation, not only an
+ * equal-height landing inside the first 96 pixels. Highway repeatedly
+ * alternates medium gaps and higher roofs: the old fixed 40..96px and
+ * +/-20px check returned false at a real edge (ground=1 ahead28=0), then
+ * the WAIT decision suppressed every jump forever.
+ *
+ * Native jump physics and wall-slide recovery remain responsible for the
+ * actual crossing. A candidate must be walkable terrain, have head space
+ * above it, and have solid support slightly farther into the landing.
+ * Distances beyond 176px are NOT treated as safe native jumps. */
+static bool cpu_companion_gap_reachable(const uint8_t *ram,int x,int feet,
+                                         int direction,int *distance_out,
+                                         int *rise_out) {
+  if (!ram || !direction) return false;
+  for (int d=40;d<=176;d+=8) {
+    int landing_x=x+direction*d;
+    for (int rise=0;rise<=88;rise+=8) {
+      int py=feet-rise,surface=0;
+      unsigned type=MmxWeaponsTerrainClass(ram,landing_x,py);
+      if (!cpu_companion_walkable(type) ||
+          !MmxWeaponsTerrainSolid(ram,landing_x,py,true,&surface) ||
+          surface<feet-88 || surface>feet+24 ||
+          MmxWeaponsTerrainSolid(ram,landing_x,surface-16,true,NULL) ||
+          MmxWeaponsTerrainSolid(ram,landing_x,surface-32,true,NULL) ||
+          !cpu_companion_supported(ram,landing_x+direction*8,surface+2))
+        continue;
+      /* Do not infer a high unreachable roof across a full screen as a
+       * safe landing for a single undashed jump. */
+      if (d>144 && feet-surface>40) continue;
+      if (distance_out) *distance_out=d;
+      if (rise_out) *rise_out=feet-surface;
       return true;
+    }
+    /* Some safe short ledges are slightly below the starting ground. */
+    if (d<=112 && cpu_companion_landing(ram,landing_x,feet) &&
+        !MmxWeaponsTerrainSolid(ram,landing_x,feet-28,false,NULL)) {
+      if (distance_out) *distance_out=d;
+      if (rise_out) *rise_out=0;
+      return true;
+    }
   }
   return false;
 }
@@ -940,7 +971,9 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
    * These checks use the follower's own ground and obstruction state only.
    * If the ground ends ahead and there is no reachable landing, wait.
    * Do this before obstruction/stall reactions to avoid walking into void. */
-  bool short_landing=edge && cpu_companion_gap_reachable(ram,x,feet,direction);
+  int landing_distance=0, landing_rise=0;
+  bool short_landing=edge && cpu_companion_gap_reachable(
+      ram,x,feet,direction,&landing_distance,&landing_rise);
   int wall_distance=0;
   /* Look for a tall climbable wall while STILL on safe ground, not only
    * after the cliff sensor fires. Once within ~48px, proactively jump at
@@ -970,8 +1003,10 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
   if ((edge || climb_takeoff || blocked || obstacle) && getenv("MMX_CPU_TRACE")) {
     static int last_log=-1000;
     if (snes_frame_counter-last_log>=90) {
-      fprintf(stderr,"[cpu-nav] edge=%d x=%d feet=%d dir=%d p1dx=%d short=%d raised=%d goalwall=%d wall_dist=%d grounded=%d cooldown=%u\n",
-              (int)edge,x,feet,direction,dx,(int)short_landing,(int)raised_wall,
+      fprintf(stderr,"[cpu-nav] edge=%d x=%d feet=%d dir=%d p1dx=%d p1dy=%d landing=%d dist=%d rise=%d raised=%d goalwall=%d wall_dist=%d grounded=%d cooldown=%u\n",
+              (int)edge,x,feet,direction,dx,
+              (int)word(leader->body+8)-y,(int)short_landing,
+              landing_distance,landing_rise,(int)raised_wall,
               (int)goal_wall,wall_distance,(int)grounded,(unsigned)cpu_jump_cooldown_frames);
       last_log=snes_frame_counter;
     }
@@ -1006,8 +1041,12 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
   /* An elevated wall >~72px away can need more horizontal range than a
    * normal hop. Ask Zero to dash-jump as part of his own route choice;
    * the game's native equipment/movement code still controls the result. */
-  cpu_cliff_dash_frames=(move==MMX_CPU_MOVE_CLIMB && wall_distance>72 &&
-                         follower->character==MMX_COOP_ZERO) ? 20 : 0;
+  /* Long safe crossings need dash momentum too, not only climbs.
+   * A 100+px landing previously triggered an ordinary short ground jump
+   * and often failed even when the route scan found a sound landing. */
+  cpu_cliff_dash_frames=(follower->character==MMX_COOP_ZERO &&
+      ((move==MMX_CPU_MOVE_CLIMB && wall_distance>72) ||
+       (edge && short_landing && landing_distance>80))) ? 20 : 0;
   uint16_t takeoff=(input&(uint16_t)~MMX_CPU_FIRE)|MMX_CPU_JUMP;
   if (cpu_cliff_dash_frames) {
     takeoff|=MMX_CPU_DASH;
