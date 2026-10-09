@@ -84,6 +84,21 @@ static inline MmxCpuMoveDecision MmxCoopCpuChooseMove(
   return MMX_CPU_MOVE_WALK;
 }
 
+/* X can stand nearly directly above the CPU, so horizontal follow has
+ * no direction. Choose a nearby, physically sensed wall to climb rather
+ * than idling. Prefer the wall toward X when a horizontal preference
+ * exists; when directly underneath, use the nearest visible wall face.
+ * Do not invent a direction if no solid wall was detected. */
+static inline int MmxCoopCpuChooseClimbDirection(int target_dx,
+                                                  int wall_right,
+                                                  int wall_left) {
+  if (target_dx>=12) return wall_right ? 1 : 0;
+  if (target_dx<=-12) return wall_left ? -1 : 0;
+  if (!wall_right) return wall_left ? -1 : 0;
+  if (!wall_left) return 1;
+  return wall_right<=wall_left ? 1 : -1;
+}
+
 /* The trusted co-op plugin prepares the owner-supplied X3 ROM, then enables
  * the chosen roster. This mode excludes single-player character exchange. */
 bool MmxCoopEnable(unsigned p1_character);
