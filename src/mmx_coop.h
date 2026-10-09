@@ -69,6 +69,8 @@ static inline void MmxCoopImportLegacy(MmxCoopState *out, const uint8_t *bytes) 
 bool MmxCoopEnable(unsigned p1_character);
 /* Host-only option: synthesize P2 gamepad input during local co-op. */
 void MmxCoopSetCpuCompanion(bool active);
+/* Desktop host: physical L2 analog state, independent of the 12 SNES buttons. */
+void MmxCoopSetSwitchTrigger(bool held);
 void MmxCoopDisable(void);
 bool MmxCoopEnabled(void);
 void MmxCoopReset(void);
