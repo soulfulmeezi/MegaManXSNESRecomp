@@ -1184,27 +1184,31 @@ static void coop_cpu_companion_checks(const char *fixture) {
         (SNES_PAD_B|toward_wall),
       "wall recovery: first actionable slide frame kicks immediately");
 
-  /* The native kick launches the body out of slide into airborne action 6:
-   * this transition is required to rearm jump #2. A stuck slide without
-   * an actual departure must NOT spend both jumps automatically. */
+  /* The native kick leaves slide. Unlike the old one-frame B tap,
+   * this controller now holds B during the wall-kick ascent for full
+   * height while steering briefly away, then back to the wall. */
   s.players[1].body[2]=6;
   MmxCoopSetState(&s);
   MmxCoopPoll(toward_wall,0);s=MmxCoopGetState();
-  check((s.players[1].input&away) && !(s.players[1].input&SNES_PAD_B),
-      "wall recovery: push away and release B after first kick");
+  check((s.players[1].input&(away|SNES_PAD_B))==(away|SNES_PAD_B),
+      "wall recovery: push away with B held for a higher kick");
   MmxCoopPoll(toward_wall,0);s=MmxCoopGetState();
-  check((s.players[1].input&away) && !(s.players[1].input&SNES_PAD_B),
-      "wall recovery: continue kick-away for initial ascent");
+  check((s.players[1].input&(away|SNES_PAD_B))==(away|SNES_PAD_B),
+      "wall recovery: continue jump-hold through initial ascent");
 
-  /* Simulate an EARLY wall reattachment, two ticks into the four-tick
-   * push. Recovery MUST jump on this very poll rather than waiting for
-   * the fixed four-away/nine-return timer to expire. */
+  /* EARLY wall reattachment interrupts the 4+9-frame steering timer.
+   * B is held from the first kick, so the first re-slide frame releases
+   * it and the NEXT frame supplies a fresh B press edge. Two frames is
+   * the earliest possible response for the game's edge-triggered input. */
   s.players[1].body[2]=0x10;
   MmxCoopSetState(&s);
   MmxCoopPoll(away,0);s=MmxCoopGetState();
+  check(!(s.players[1].input&SNES_PAD_B) && (s.players[1].input&toward_wall),
+      "wall recovery: re-slide releases B immediately even during hold");
+  MmxCoopPoll(away,0);s=MmxCoopGetState();
   check((s.players[1].input&(SNES_PAD_B|toward_wall))==
         (SNES_PAD_B|toward_wall),
-      "wall recovery: second eligible slide interrupts return timer immediately");
+      "wall recovery: second kick on first rearmed slide frame");
   for (unsigned tick=0;tick<4+9+20;++tick) {
     MmxCoopPoll(away,0);s=MmxCoopGetState();
     check(!(s.players[1].input&SNES_PAD_B),
