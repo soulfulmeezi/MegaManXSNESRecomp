@@ -1049,6 +1049,45 @@ static void coop_slime_checks(const char *fixture,uint8_t *start,uint8_t *expect
 #include "mmx_sigma_test.inc"
 #include "mmx_coop_bounce_test.inc"
 #include "mmx_hadouken_test.inc"
+/* Opt-in local companion controller checks against a real, loaded X1
+ * stage snapshot. In CI the private ROM and fixture are supplied externally. */
+static void coop_cpu_companion_checks(const char *fixture) {
+  MmxCoopDisable();
+  check(RtlLoadSnapshot(fixture), "CPU companion fixture loads");
+  check(MmxCoopEnable(MMX_COOP_X), "CPU companion enables normal co-op");
+  coop_frames(8,0,0);
+  MmxCoopState s=MmxCoopGetState();
+  unsigned x=coop_x(&s.players[0]),y=coop_y(&s.players[0]);
+  check(coop_place_fixture_partner(x+32,y), "CPU companion partner joins");
+  s=MmxCoopGetState();
+  /* Put the leader 80px to the right and 48px above the grounded follower,
+   * so the expected pad must contain both RIGHT and B (jump). */
+  unsigned follow_x=coop_x(&s.players[1]),follow_y=coop_y(&s.players[1]);
+  unsigned leader_x=follow_x+80,leader_y=follow_y-48;
+  s.players[0].body[5]=(uint8_t)leader_x;
+  s.players[0].body[6]=(uint8_t)(leader_x>>8);
+  s.players[0].body[8]=(uint8_t)leader_y;
+  s.players[0].body[9]=(uint8_t)(leader_y>>8);
+  s.players[1].body[0x2b]|=4; /* Native ground-contact bit. */
+  s.stage_pending=0;
+  MmxCoopSetState(&s);
+  MmxCoopSetCpuCompanion(true);
+  MmxCoopPoll(0,SNES_PAD_LEFT);
+  s=MmxCoopGetState();
+  check((s.players[1].input&(SNES_PAD_RIGHT|SNES_PAD_B))==(SNES_PAD_RIGHT|SNES_PAD_B),
+      "grounded CPU companion follows and jumps toward elevated leader");
+  s.players[1].body[0x2b]&=(uint8_t)~4;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check((s.players[1].input&SNES_PAD_RIGHT) && !(s.players[1].input&SNES_PAD_B),
+      "airborne CPU companion releases jump for the next landing");
+  MmxCoopSetCpuCompanion(false);
+  MmxCoopPoll(0,SNES_PAD_LEFT);s=MmxCoopGetState();
+  check(s.players[1].input==SNES_PAD_LEFT,
+      "human mode restores the real second controller");
+  MmxCoopDisable();
+  puts("MMX CPU COMPANION BASIC INPUT CHECKS PASSED");
+}
 static void coop_checks(const char *assets, const char *fixture,
                         uint8_t *start, uint8_t *expected, uint8_t *actual, size_t cap) {
   check(assets && fixture, "co-op check requires private source assets and a grounded fixture");
@@ -1101,6 +1140,7 @@ static void coop_checks(const char *assets, const char *fixture,
   if(getenv("MMX_COOP_STAGE_FIXTURE")) {coop_stage_entry_checks(getenv("MMX_COOP_STAGE_FIXTURE"));return;}
   if(getenv("MMX_COOP_PLATFORM_CAPTURE")) {coop_platform_checks(fixture,getenv("MMX_COOP_PLATFORM_CAPTURE"));return;}
   if(getenv("MMX_COOP_NATURAL_DEATH")) {coop_natural_death_checks(fixture);return;}
+  if(getenv("MMX_COOP_CPU_TEST")) {coop_cpu_companion_checks(fixture);return;}
   if(getenv("MMX_COOP_KEYBOARD_TEST")) {coop_keyboard_checks(fixture);return;}
   if(getenv("MMX_COOP_BOSS_SURVIVOR_FIXTURE")) {coop_boss_survivor_checks(getenv("MMX_COOP_BOSS_SURVIVOR_FIXTURE"));return;}
   if(getenv("MMX_COOP_CAPSULE_FULL_FIXTURE")) {coop_capsule_full_checks(getenv("MMX_COOP_CAPSULE_FULL_FIXTURE"));return;}
