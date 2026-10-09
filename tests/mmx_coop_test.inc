@@ -1146,36 +1146,88 @@ static void coop_cpu_companion_checks(const char *fixture) {
       "jump cooldown prevents immediate repeated takeoff");
   g_ram[enemy]=0;
 
-  /* Wall recovery does not require any jump input from the player.
-   * Simulate the native airborne action $10 (wall slide) in the controlled
-   * follower's context and verify a fresh B kick, release, and away-steer. */
+  /* High-priority wall-slide recovery. It must ignore player motion,
+   * perform exactly two native wall-kick press edges, and stop jumping
+   * until ground contact is confirmed. Test with a controlled wall-slide
+   * snapshot so no player input/animation triggers the recovery. */
   MmxCoopSetCpuCompanion(false);
-  MmxCoopSetCpuCompanion(true); /* fresh timers from an independent approach */
+  MmxCoopSetCpuCompanion(true);
+  s=MmxCoopGetState();
   s.players[1].body[0x2b]&=(uint8_t)~4;
-  s.players[1].body[2]=0x10; /* native wall slide */
+  s.players[1].body[2]=0x10; /* Native wall slide. */
+  s.players[1].input=0;
+  MmxCoopSetState(&s);
+  int wx=(int)coop_x(&s.players[1]), wy=(int)coop_y(&s.players[1]);
+  int wall_dir=
+      MmxWeaponsTerrainSolid(g_ram,wx+11,wy-4,false,NULL) ? 1 :
+      MmxWeaponsTerrainSolid(g_ram,wx-11,wy-4,false,NULL) ? -1 :
+      (coop_x(&s.players[0])>coop_x(&s.players[1]) ? 1 : -1);
+  uint16_t toward_wall=wall_dir>0 ? SNES_PAD_RIGHT : SNES_PAD_LEFT;
+  uint16_t away=wall_dir>0 ? SNES_PAD_LEFT : SNES_PAD_RIGHT;
+
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check((s.players[1].input&(SNES_PAD_B|toward_wall))==
+        (SNES_PAD_B|toward_wall),
+      "wall recovery: first native wall-jump begins independently");
+  for (unsigned tick=0;tick<4;++tick) {
+    MmxCoopPoll(toward_wall,0);s=MmxCoopGetState();
+    check((s.players[1].input&away) && !(s.players[1].input&SNES_PAD_B),
+        "wall recovery: kick-away input overrides the human follow direction");
+  }
+  for (unsigned tick=0;tick<9;++tick) {
+    MmxCoopPoll(away,0);s=MmxCoopGetState();
+    check((s.players[1].input&toward_wall) && !(s.players[1].input&SNES_PAD_B),
+        "wall recovery: returns toward wall before the second jump");
+  }
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check((s.players[1].input&(SNES_PAD_B|toward_wall))==
+        (SNES_PAD_B|toward_wall),
+      "wall recovery: second jump only on renewed wall slide");
+  for (unsigned tick=0;tick<4+9+20;++tick) {
+    MmxCoopPoll(away,0);s=MmxCoopGetState();
+    check(!(s.players[1].input&SNES_PAD_B),
+        "wall recovery: never jumps a third time before landing");
+  }
+
+  /* Ground after TWO jumps must release high-priority wall state in the
+   * same tick; once landed the CPU may follow independently again. */
+  s.players[1].body[0x2b]|=4;
+  s.players[1].body[2]=0;
   MmxCoopSetState(&s);
   MmxCoopPoll(0,0);s=MmxCoopGetState();
-  check((s.players[1].input&(SNES_PAD_RIGHT|SNES_PAD_B))==
-      (SNES_PAD_RIGHT|SNES_PAD_B),
-      "CPU companion kicks off a wall without the leader jumping");
-  /* Wall-side detection prefers the live terrain, falling back to travel
-   * toward the leader if the fixture has no close wall at the character. */
-  int wall_dir=
-      MmxWeaponsTerrainSolid(g_ram,(int)follow_x+11,(int)follow_y-4,false,NULL) ? 1 :
-      MmxWeaponsTerrainSolid(g_ram,(int)follow_x-11,(int)follow_y-4,false,NULL) ? -1 : 1;
-  uint16_t away=wall_dir>0 ? SNES_PAD_LEFT : SNES_PAD_RIGHT;
-  uint16_t toward_wall=wall_dir>0 ? SNES_PAD_RIGHT : SNES_PAD_LEFT;
-  MmxCoopPoll(0,0);s=MmxCoopGetState();
-  check((s.players[1].input&away) && !(s.players[1].input&SNES_PAD_B),
-      "CPU releases jump and steers away from the contacted wall");
-  for (unsigned tick=0;tick<3;++tick) MmxCoopPoll(0,0);
-  MmxCoopPoll(0,0);s=MmxCoopGetState();
-  check((s.players[1].input&toward_wall) && !(s.players[1].input&SNES_PAD_B),
-      "CPU steers back toward the wall after a brief kick-off");
-  for (unsigned tick=0;tick<8;++tick) MmxCoopPoll(0,0);
-  s=MmxCoopGetState();
   check(!(s.players[1].input&SNES_PAD_B),
-      "wall-jump recovery does not repeatedly mash jump each frame");
+      "wall recovery: landing immediately cancels remaining recovery input");
+
+  /* Test early landing after just ONE jump: do not force jump number two.
+   * A genuinely new wall-slide after landing may then begin a new cycle. */
+  MmxCoopSetCpuCompanion(false);
+  MmxCoopSetCpuCompanion(true);
+  s=MmxCoopGetState();
+  s.players[1].body[0x2b]&=(uint8_t)~4;
+  s.players[1].body[2]=0x10;
+  s.players[1].input=0;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check((s.players[1].input&SNES_PAD_B)!=0,
+      "wall recovery: one kick occurs before early landing");
+  s.players[1].body[0x2b]|=4;
+  s.players[1].body[2]=0;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check(!(s.players[1].input&SNES_PAD_B),
+      "wall recovery: early landing skips the second kick");
+  s.players[1].body[0x2b]&=(uint8_t)~4;
+  s.players[1].body[2]=0x10;
+  s.players[1].input=0;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check((s.players[1].input&SNES_PAD_B)!=0,
+      "wall recovery: fresh wall slide after landing permits a new first kick");
+  MmxCoopSetCpuCompanion(false);
+  MmxCoopSetCpuCompanion(true);
+  s.players[1].body[0x2b]|=4;
+  s.players[1].body[2]=0;
+  MmxCoopSetState(&s);
 
   /* The human can run toward a companion who is already AHEAD: do not
    * force the CPU to turn away from an approaching obstacle. A stationary
