@@ -1296,6 +1296,11 @@ static void coop_cpu_companion_checks(const char *fixture) {
     s.players[1].body[2]=6;
     MmxCoopSetState(&s);
     MmxCoopPoll(0,0);s=MmxCoopGetState();
+    /* Returning toward the climb wall IMMEDIATELY after each kick is
+     * essential: steering away used to let the CPU land at its starting
+     * x/y without reattaching for a second wall-kick. */
+    check((s.players[1].input&wall_dir_input)!=0,
+        "tall climb: steer toward the wall during native kick ascent");
     s.players[1].body[2]=0x10;
     MmxCoopSetState(&s);
     MmxCoopPoll(0,0);s=MmxCoopGetState();
