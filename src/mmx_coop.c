@@ -34,7 +34,8 @@ static MmxCoopState state = {.players = {{.character = MMX_COOP_X}, {.character 
 static bool enabled;
 static bool cpu_companion; /* Opt-in local mode; never stored in guest save state. */
 static uint8_t cpu_jump_hold_frames, cpu_jump_cooldown_frames;
-static int8_t cpu_jump_direction;
+static uint8_t cpu_wall_kick_cooldown, cpu_wall_push_frames;
+static int8_t cpu_jump_direction, cpu_wall_push_direction;
 static unsigned starting_character;
 _Static_assert(sizeof(MmxCoopPlayer) == 2276, "Co-op player save ABI");
 _Static_assert(sizeof(MmxCoopState) == 4664, "Co-op save ABI");
@@ -320,8 +321,13 @@ bool MmxCoopTransitionActive(void) {
 bool MmxCoopEnabled(void) { return enabled; }
 static void shot_ghost_reset(void);
 static void lift_reset(void);
+static void cpu_companion_reset_motion(void) {
+  cpu_jump_hold_frames=cpu_jump_cooldown_frames=0;
+  cpu_wall_kick_cooldown=cpu_wall_push_frames=0;
+  cpu_jump_direction=cpu_wall_push_direction=0;
+}
 void MmxCoopReset(void) {
-  cpu_jump_hold_frames=cpu_jump_cooldown_frames=0;cpu_jump_direction=0;
+  cpu_companion_reset_motion();
   platform_entry.valid=false;lift_reset();shot_ghost_reset();
   MmxCoopViewsResetWorld();
   MmxWeaponsCameraQuery(enabled?weapon_view:NULL);
@@ -341,9 +347,7 @@ bool MmxCoopEnable(unsigned character) {
 }
 void MmxCoopDisable(void) { enabled = false; cpu_companion = false; starting_character = 0; MmxCoopReset(); }
 void MmxCoopSetCpuCompanion(bool active) {
-  if (cpu_companion!=active) {
-    cpu_jump_hold_frames=cpu_jump_cooldown_frames=0;cpu_jump_direction=0;
-  }
+  if (cpu_companion!=active) cpu_companion_reset_motion();
   cpu_companion=active;
 }
 MmxCoopState MmxCoopGetState(void) { return state; }
@@ -599,6 +603,18 @@ static bool cpu_companion_supported(const uint8_t *ram, int x, int feet) {
     if (MmxWeaponsTerrainSolid(ram,x,feet+depth,true,NULL)) return true;
   return false;
 }
+/* Detect a low or tall solid obstacle directly ahead at chest/leg height,
+ * without depending on P1 jumping or standing on a higher platform. Probe
+ * non-floor collision so a nearby slope or harmless decoration is not a wall. */
+static bool cpu_companion_obstacle_ahead(const uint8_t *ram,int x,int y,int direction) {
+  if (!direction) return false;
+  for (int look=12;look<=22;look+=5) {
+    int wall=x+direction*look;
+    if (MmxWeaponsTerrainSolid(ram,wall,y-5,false,NULL) ||
+        MmxWeaponsTerrainSolid(ram,wall,y-14,false,NULL)) return true;
+  }
+  return false;
+}
 /* Enemy bodies occupy $0E68..$1227, one 64-byte record per slot.
  * Choose a living target roughly level with the companion and in the current
  * travel/facing direction. Avoid attacking every decorative/scripted object.
@@ -613,50 +629,68 @@ static bool cpu_companion_enemy_ahead(const uint8_t *r, int x, int y, int direct
   }
   return false;
 }
-/* Feed native co-op gamepad input rather than moving sprites directly.
- * X1/X3 jump height depends on holding B while rising. Releasing B on the
- * first airborne frame makes tiny hops and can repeatedly restart a jump at
- * ledges. Keep the jump held for 12 subsequent ticks, then explicitly release
- * it and impose a cooldown before another attempt. This is offline-only host
- * state and is reset on mode changes/stage initialization; it never modifies
- * the frozen co-op save ABI. */
+/* Feed native co-op pad input rather than moving sprites directly.
+ * Offline-only host timers preserve variable-height ground jumps and allow
+ * fresh B press edges for wall kicks. No co-op save ABI or netplay changes. */
 static uint16_t cpu_companion_input(const uint8_t *ram) {
-  const MmxCoopPlayer *leader = &state.players[0], *follower = &state.players[1];
+  const MmxCoopPlayer *leader=&state.players[0], *follower=&state.players[1];
   if (!ram || !state.initialized || state.menu_owner || state.scene_owner ||
-      state.stage_pending || leader->status != MMX_COOP_ALIVE ||
-      follower->status != MMX_COOP_ALIVE ||
-      !(leader->body[0x27] & 127) || !(follower->body[0x27] & 127)) {
-    cpu_jump_hold_frames=cpu_jump_cooldown_frames=0;cpu_jump_direction=0;
+      state.stage_pending || leader->status!=MMX_COOP_ALIVE ||
+      follower->status!=MMX_COOP_ALIVE ||
+      !(leader->body[0x27]&127) || !(follower->body[0x27]&127)) {
+    cpu_companion_reset_motion();
     return 0;
   }
-  int dx = (int)word(leader->body+5) - (int)word(follower->body+5);
-  int direction = dx>40 ? 1 : dx< -40 ? -1 : 0;
-  int x=(int)word(follower->body+5), y=(int)word(follower->body+8);
-  uint16_t input = direction>0 ? MMX_CPU_RIGHT : direction<0 ? MMX_CPU_LEFT : 0;
+  int dx=(int)word(leader->body+5)-(int)word(follower->body+5);
+  int direction=dx>40 ? 1 : dx< -40 ? -1 : 0;
+  int x=(int)word(follower->body+5),y=(int)word(follower->body+8);
+  bool grounded=(follower->body[0x2b]&4)!=0;
+  bool wall_slide=!grounded && follower->body[2]==0x10;
+  uint16_t input=direction>0 ? MMX_CPU_RIGHT : direction<0 ? MMX_CPU_LEFT : 0;
   if (cpu_jump_cooldown_frames) --cpu_jump_cooldown_frames;
-  /* Preserve the takeoff direction while B is held, including if the leader
-   * briefly enters the 40-pixel follow dead zone during the jump. */
+  if (cpu_wall_kick_cooldown) --cpu_wall_kick_cooldown;
+
+  /* After a wall kick, briefly steer AWAY from the wall to clear collision.
+   * Direction returns to P1 once the kick is underway. */
+  if (cpu_wall_push_frames) {
+    --cpu_wall_push_frames;
+    return cpu_wall_push_direction>0 ? MMX_CPU_RIGHT : MMX_CPU_LEFT;
+  }
+  if (wall_slide && cpu_jump_hold_frames) {
+    /* An ordinary B hold is not a new wall-jump press. Release it first. */
+    cpu_jump_hold_frames=0;
+    return input;
+  }
+  if (wall_slide && !cpu_wall_kick_cooldown && !(follower->input&MMX_CPU_JUMP)) {
+    /* Action $10 is the original native wall-slide. Jump while still against
+     * the wall, then push away. Repeat if it becomes a wall-slide again.
+     * This is NOT a permanent wall cling or an artificial vertical teleport. */
+    int wall_direction=direction ? direction : (follower->body[0x69]&64 ? 1 : -1);
+    cpu_wall_push_direction=(int8_t)-wall_direction;
+    cpu_wall_push_frames=8;
+    cpu_wall_kick_cooldown=22;
+    return (wall_direction>0 ? MMX_CPU_RIGHT : MMX_CPU_LEFT)|MMX_CPU_JUMP;
+  }
+  /* Preserve takeoff direction and hold B long enough for a useful ascent,
+   * even if P1 changes direction while the CPU is already jumping. */
   if (cpu_jump_hold_frames) {
     --cpu_jump_hold_frames;
-    input=cpu_jump_direction>0 ? MMX_CPU_RIGHT : MMX_CPU_LEFT;
-    return input|MMX_CPU_JUMP; /* No firing during initial jump animation. */
+    return (cpu_jump_direction>0 ? MMX_CPU_RIGHT : MMX_CPU_LEFT)|MMX_CPU_JUMP;
   }
-  /* Use travel direction when closing a gap; otherwise aim in the native
-   * facing direction ($0C11 bit 6, projected to body[0x69]). */
+  /* Shoot nearby enemies outside jump takeoff/kick phases. */
   int facing=direction ? direction : (follower->body[0x69]&64 ? 1 : -1);
-  /* Brief Y taps retain the X3 buster's own attack/cooldown semantics. */
   if (ram[0xb9c]%12==0 && cpu_companion_enemy_ahead(ram,x,y,facing))
     input|=MMX_CPU_FIRE;
 
-  if (!(follower->body[0x2b] & 4) || !direction) return input;
-  int ahead=x+direction*28, feet=y+16;
-  bool at_edge=cpu_companion_supported(ram,x,feet) &&
+  if (!grounded || !direction) return input;
+  int ahead=x+direction*28,feet=y+16;
+  bool edge=cpu_companion_supported(ram,x,feet) &&
       !cpu_companion_supported(ram,ahead,feet);
-  bool leader_higher=(int)word(leader->body+8) < y-24 && abs(dx)<144;
-  if (!at_edge && !leader_higher) return input;
-  /* A solid ceiling can cancel the native takeoff and cause repeated head
-   * bumps. With no clearance or during cooldown, wait at a detected edge
-   * rather than walk the companion directly into a pit. */
+  bool obstacle=cpu_companion_obstacle_ahead(ram,x,y,direction);
+  bool leader_higher=(int)word(leader->body+8)<y-24 && abs(dx)<144;
+  /* A wall is independently actionable: Zero need not wait for X to jump. */
+  if (!edge && !obstacle && !leader_higher) return input;
+
   bool headroom=true;
   for (int offset=-6;offset<=6;offset+=6) {
     if (MmxWeaponsTerrainSolid(ram,x+offset,y-25,false,NULL) ||
@@ -665,14 +699,13 @@ static uint16_t cpu_companion_input(const uint8_t *ram) {
     }
   }
   if (!headroom || cpu_jump_cooldown_frames) {
-    if (at_edge) input&=(uint16_t)~(MMX_CPU_LEFT|MMX_CPU_RIGHT);
+    if (edge) input&=(uint16_t)~(MMX_CPU_LEFT|MMX_CPU_RIGHT);
     return input;
   }
   cpu_jump_hold_frames=12;
   cpu_jump_cooldown_frames=48;
   cpu_jump_direction=(int8_t)direction;
-  /* Prioritize native jump over a buster attack on the takeoff frame. */
-  return (input & (uint16_t)~MMX_CPU_FIRE)|MMX_CPU_JUMP;
+  return (input&(uint16_t)~MMX_CPU_FIRE)|MMX_CPU_JUMP;
 }
 void MmxCoopPoll(uint16_t p1, uint16_t p2) {
   if (!enabled) return;
