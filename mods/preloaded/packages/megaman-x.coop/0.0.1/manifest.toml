@@ -37,7 +37,7 @@ label = "Zero"
 feature = "coop"
 id = "companion"
 label = "Player 2 control"
-description = "Human keeps normal two-player co-op. CPU (experimental) follows, jumps, wall-kicks, attacks, and attempts safe pit rescue. In CPU mode press Select+R on Player 1's controller to switch between X and Zero; the other character becomes the CPU. Offline only."
+description = "Human keeps normal two-player co-op. CPU (experimental) follows, jumps, wall-kicks, attacks, and attempts safe pit rescue. In offline CPU mode press L2 on Player 1's controller to switch between X and Zero; the other character becomes the CPU."
 type = "choice"
 default = "human"
 [[option.choice]]
