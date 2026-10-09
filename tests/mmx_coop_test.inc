@@ -1060,10 +1060,9 @@ static void coop_cpu_companion_checks(const char *fixture) {
   unsigned x=coop_x(&s.players[0]),y=coop_y(&s.players[0]);
   check(coop_place_fixture_partner(x+32,y), "CPU companion partner joins");
   s=MmxCoopGetState();
-  /* Put the leader 80px to the right and 48px above the grounded follower,
-   * so the expected pad must contain both RIGHT and B (jump). */
   unsigned follow_x=coop_x(&s.players[1]),follow_y=coop_y(&s.players[1]);
-  unsigned leader_x=follow_x+80,leader_y=follow_y-48;
+  /* X jumping directly above Zero is NOT a reason for Zero to jump. */
+  unsigned leader_x=follow_x,leader_y=follow_y-48;
   s.players[0].body[5]=(uint8_t)leader_x;
   s.players[0].body[6]=(uint8_t)(leader_x>>8);
   s.players[0].body[8]=(uint8_t)leader_y;
@@ -1072,10 +1071,29 @@ static void coop_cpu_companion_checks(const char *fixture) {
   s.stage_pending=0;
   MmxCoopSetState(&s);
   MmxCoopSetCpuCompanion(true);
-  MmxCoopPoll(0,SNES_PAD_LEFT);
+  MmxCoopPoll(SNES_PAD_B,0);
   s=MmxCoopGetState();
-  check((s.players[1].input&(SNES_PAD_RIGHT|SNES_PAD_B))==(SNES_PAD_RIGHT|SNES_PAD_B),
-      "grounded CPU companion follows and jumps toward elevated leader");
+  check(!(s.players[1].input&SNES_PAD_B),
+      "CPU ignores X's jump button and vertical elevation");
+
+  /* Move X to the right on the same tier. With no changes to the CPU's
+   * own x position for 10+ polls, its grounded stall detection should
+   * independently request a B jump to clear its own obstacle. */
+  leader_x=follow_x+80;leader_y=follow_y;
+  s.players[0].body[5]=(uint8_t)leader_x;
+  s.players[0].body[6]=(uint8_t)(leader_x>>8);
+  s.players[0].body[8]=(uint8_t)leader_y;
+  s.players[0].body[9]=(uint8_t)(leader_y>>8);
+  MmxCoopSetState(&s);
+  bool autonomous_takeoff=false;
+  for(unsigned wait=0;wait<24;++wait) {
+    MmxCoopPoll(0,0);
+    s=MmxCoopGetState();
+    if((s.players[1].input&(SNES_PAD_RIGHT|SNES_PAD_B))==
+       (SNES_PAD_RIGHT|SNES_PAD_B)) {autonomous_takeoff=true;break;}
+  }
+  check(autonomous_takeoff,
+      "CPU independently starts an obstacle jump without player B");
   /* Simulate leaving the ground after takeoff. Holding the physical B
    * button for the full ascent (rather than only the first grounded frame)
    * is required to clear a pit in the native X1/X3 jump controller. */
