@@ -1049,9 +1049,29 @@ static void coop_slime_checks(const char *fixture,uint8_t *start,uint8_t *expect
 #include "mmx_sigma_test.inc"
 #include "mmx_coop_bounce_test.inc"
 #include "mmx_hadouken_test.inc"
+/* These decision checks require no game physics and verify that a terrain
+ * warning is resolved BEFORE ordinary left/right follow input is issued.
+ * The actual sensors and jump physics still need a ROM-backed level test. */
+static void coop_cpu_sensing_checks(void) {
+  check(MmxCoopCpuChooseMove(true,true,false,false,false)==MMX_CPU_MOVE_JUMP,
+      "ground probe: missing ground with a landing means jump");
+  check(MmxCoopCpuChooseMove(true,false,false,false,true)==MMX_CPU_MOVE_WAIT,
+      "ground probe: an unsafe pit beats follow/stall movement");
+  check(MmxCoopCpuChooseMove(true,false,true,false,false)==MMX_CPU_MOVE_CLIMB,
+      "ground probe: pit with climbable destination chooses wall approach");
+  check(MmxCoopCpuChooseMove(false,false,true,true,false)==MMX_CPU_MOVE_CLIMB,
+      "wall probe: a close wall below a raised destination initiates climb");
+  check(MmxCoopCpuChooseMove(false,false,true,false,false)==MMX_CPU_MOVE_WALK,
+      "wall probe: a distant wall doesn't force premature jump");
+  check(MmxCoopCpuChooseMove(false,false,false,false,true)==MMX_CPU_MOVE_JUMP,
+      "obstacle probe: a solid blocker triggers independent jump");
+  check(MmxCoopCpuChooseMove(false,false,false,false,false)==MMX_CPU_MOVE_WALK,
+      "terrain clear: ordinary following remains intact");
+}
 /* Opt-in local companion controller checks against a real, loaded X1
  * stage snapshot. In CI the private ROM and fixture are supplied externally. */
 static void coop_cpu_companion_checks(const char *fixture) {
+  coop_cpu_sensing_checks();
   MmxCoopDisable();
   check(RtlLoadSnapshot(fixture), "CPU companion fixture loads");
   check(MmxCoopEnable(MMX_COOP_X), "CPU companion enables normal co-op");
