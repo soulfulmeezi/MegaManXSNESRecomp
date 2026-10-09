@@ -1209,11 +1209,18 @@ static void coop_cpu_companion_checks(const char *fixture) {
   check((s.players[1].input&(SNES_PAD_B|toward_wall))==
         (SNES_PAD_B|toward_wall),
       "wall recovery: second kick on first rearmed slide frame");
-  for (unsigned tick=0;tick<4+9+20;++tick) {
+  /* A held B during kick #2 is not a THIRD press. Count only fresh
+   * rising edges, then ensure B eventually releases with no new kick. */
+  bool last_b=true,saw_release=false,third_press=false;
+  for (unsigned tick=0;tick<4+9+24;++tick) {
     MmxCoopPoll(away,0);s=MmxCoopGetState();
-    check(!(s.players[1].input&SNES_PAD_B),
-        "wall recovery: no third wall-jump after two kicks");
+    bool b=(s.players[1].input&SNES_PAD_B)!=0;
+    if (b && !last_b) third_press=true;
+    if (!b) saw_release=true;
+    last_b=b;
   }
+  check(saw_release && !third_press,
+      "wall recovery: 2 native B edges only, despite full-height held second kick");
 
   /* Ground after TWO jumps must release high-priority wall state in the
    * same tick; once landed the CPU may follow independently again.
@@ -1260,6 +1267,65 @@ static void coop_cpu_companion_checks(const char *fixture) {
   s.players[1].body[0x2b]|=4;
   s.players[1].body[2]=0;
   MmxCoopSetState(&s);
+
+  /* High-elevation goal is different from an accidental wall slide.
+   * A 272px Highway support column requires several native wall kicks
+   * without landing. Simulate a safe grounded X far above the follower,
+   * then repeatedly leave/re-enter the native slide action. */
+  MmxCoopSetCpuCompanion(false);
+  MmxCoopSetCpuCompanion(true);
+  s=MmxCoopGetState();
+  unsigned cpu_y=coop_y(&s.players[1]);
+  unsigned cpu_x=coop_x(&s.players[1]);
+  unsigned goal_y=cpu_y>=192 ? cpu_y-160 : 0;
+  s.players[0].body[5]=(uint8_t)(cpu_x+44);
+  s.players[0].body[6]=(uint8_t)((cpu_x+44)>>8);
+  s.players[0].body[8]=(uint8_t)goal_y;
+  s.players[0].body[9]=(uint8_t)(goal_y>>8);
+  s.players[0].body[0x2b]|=4;
+  s.players[1].body[0x2b]&=(uint8_t)~4;
+  s.players[1].body[2]=0x10;
+  s.players[1].input=0;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  uint16_t wall_dir_input=(s.players[1].input&SNES_PAD_RIGHT)?
+      SNES_PAD_RIGHT:SNES_PAD_LEFT;
+  check((s.players[1].input&SNES_PAD_B)!=0,
+      "tall climb: first native wall kick fires as soon as slide is available");
+  for (unsigned n=2;n<=8;++n) {
+    s.players[1].body[2]=6;
+    MmxCoopSetState(&s);
+    MmxCoopPoll(0,0);s=MmxCoopGetState();
+    s.players[1].body[2]=0x10;
+    MmxCoopSetState(&s);
+    MmxCoopPoll(0,0);s=MmxCoopGetState();
+    check(!(s.players[1].input&SNES_PAD_B),
+        "tall climb: immediate slide reattachment releases old B hold");
+    MmxCoopPoll(0,0);s=MmxCoopGetState();
+    check((s.players[1].input&(SNES_PAD_B|wall_dir_input))==
+          (SNES_PAD_B|wall_dir_input),
+        "tall climb: each renewed wall slide can trigger another native kick");
+  }
+  s.players[1].body[2]=6;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  s.players[1].body[2]=0x10;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check(!(s.players[1].input&SNES_PAD_B),
+      "tall climb: eight-kick cap prevents an unlimited loop in midair");
+  /* Solid ground overrides even a partially completed high-wall climb. */
+  s.players[1].body[0x2b]|=4;
+  s.players[1].body[2]=0;
+  s.players[0].body[5]=s.players[1].body[5];
+  s.players[0].body[6]=s.players[1].body[6];
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check(!(s.players[1].input&SNES_PAD_B),
+      "tall climb: confirmed landing immediately cancels any remaining kicks");
+  MmxCoopSetCpuCompanion(false);
+  MmxCoopSetCpuCompanion(true);
 
   /* The human can run toward a companion who is already AHEAD: do not
    * force the CPU to turn away from an approaching obstacle. A stationary
