@@ -1067,6 +1067,18 @@ static void coop_cpu_sensing_checks(void) {
       "obstacle probe: a solid blocker triggers independent jump");
   check(MmxCoopCpuChooseMove(false,false,false,false,false)==MMX_CPU_MOVE_WALK,
       "terrain clear: ordinary following remains intact");
+  check(MmxCoopCpuChooseClimbDirection(0,24,0)==1,
+      "high goal directly above: choose nearby right-hand wall");
+  check(MmxCoopCpuChooseClimbDirection(0,0,20)==-1,
+      "high goal directly above: choose nearby left-hand wall");
+  check(MmxCoopCpuChooseClimbDirection(0,48,24)==-1,
+      "high goal directly above: prefer nearer climb wall");
+  check(MmxCoopCpuChooseClimbDirection(30,24,10)==1,
+      "horizontal preference directs climb to player's side");
+  check(MmxCoopCpuChooseClimbDirection(30,0,10)==0,
+      "never divert away from player to an unrelated wall");
+  check(MmxCoopCpuChooseClimbDirection(0,0,0)==0,
+      "do not invent wall direction when sensors see none");
 }
 /* Opt-in local companion controller checks against a real, loaded X1
  * stage snapshot. In CI the private ROM and fixture are supplied externally. */
