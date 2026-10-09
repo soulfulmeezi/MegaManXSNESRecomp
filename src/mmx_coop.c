@@ -53,6 +53,9 @@ static uint8_t cpu_wall_jump_hold_frames;
 static bool cpu_tall_wall_climb;
 static uint16_t cpu_tall_wall_start_y, cpu_tall_wall_best_y;
 static uint16_t cpu_tall_wall_kick_x, cpu_tall_wall_kick_y;
+/* Count wall-jump opportunities from native engine state, not a timer.
+ * Once the kick's real upward arc peaks, release B proactively so the
+ * first wall-slide frame can receive a fresh B edge with no lost frame. */
 static uint8_t cpu_tall_wall_trace_ticks;
 static bool cpu_wall_y_valid;
 static uint16_t cpu_wall_last_y;
@@ -896,12 +899,25 @@ static bool cpu_companion_wall_jump_near(const uint8_t *ram,int x,int y,int dir)
  * toward steering is shorter for tall climbs so Zero can reattach higher. */
 static uint16_t cpu_companion_wall_recovery(const MmxCoopPlayer *f,
                                             bool wall_slide,bool near_wall,
-                                            bool descending) {
+                                            bool descending,bool at_kick_apex) {
   uint16_t toward=cpu_wall_direction>0 ? MMX_CPU_RIGHT : MMX_CPU_LEFT;
   uint16_t away=cpu_wall_direction>0 ? MMX_CPU_LEFT : MMX_CPU_RIGHT;
   unsigned max_kicks=cpu_tall_wall_climb ? 8u : 2u;
   if (!wall_slide && cpu_wall_recovery_jumps)
     cpu_wall_recovery_left_slide=true;
+  /* A fast wall climb must keep B through the upward motion, then have
+   * B UP before contact returns. Detect the native apex from successive
+   * Y samples rather than wasting 4+9 steering frames or guessing a
+   * fixed button hold. If the apex and slide happen on the same tick,
+   * releasing here restores a fresh B edge for the NEXT available tick. */
+  if (cpu_tall_wall_climb && at_kick_apex && cpu_wall_jump_hold_frames) {
+    cpu_wall_jump_hold_frames=0;
+    if (getenv("MMX_CPU_TRACE"))
+      fprintf(stderr,"[cpu-wall] apex B-release kick=%u x=%u y=%u frame=%d\n",
+              (unsigned)cpu_wall_recovery_jumps,
+              (unsigned)word(f->body+5),(unsigned)word(f->body+8),
+              snes_frame_counter);
+  }
 
   /* A buffered press has to result in the game's wall-kick action ($12),
    * or it was only a speculative press against nearby collision. Count
@@ -918,7 +934,7 @@ static uint16_t cpu_companion_wall_recovery(const MmxCoopPlayer *f,
         cpu_tall_wall_trace_ticks=0;
       }
       cpu_wall_recovery_ticks=cpu_tall_wall_climb ? 0 : 4;
-      cpu_wall_jump_hold_frames=cpu_tall_wall_climb ? 5 : 17;
+      cpu_wall_jump_hold_frames=cpu_tall_wall_climb ? 24 : 17;
       if (getenv("MMX_CPU_TRACE"))
         fprintf(stderr,"[cpu-wall] buffered kick confirmed %u/%u action=18 frame=%d\n",
                 (unsigned)cpu_wall_recovery_jumps,max_kicks,snes_frame_counter);
@@ -954,10 +970,11 @@ static uint16_t cpu_companion_wall_recovery(const MmxCoopPlayer *f,
      * frame creates a clean release, then hold INTO the same wall while
      * still rising; otherwise Zero drifts away and lands back at the base. */
     cpu_wall_recovery_ticks=cpu_tall_wall_climb ? 0 : 4;
-    /* A wall kick supplies its own horizontal push; hold INTO the wall
-     * early rather than adding away momentum. A shorter B hold also
-     * prepares the next fresh jump edge while climbing. */
-    cpu_wall_jump_hold_frames=cpu_tall_wall_climb ? 6 : 18;
+    /* Hold B for the whole native upward arc on a tall climb, up to
+     * 24 frames as a safety ceiling. Release at the measured apex,
+     * not at a guessed six-frame delay; the next slide must see a
+     * FRESH press edge to allow another immediate native wall-jump. */
+    cpu_wall_jump_hold_frames=cpu_tall_wall_climb ? 24 : 18;
     if (getenv("MMX_CPU_TRACE"))
       fprintf(stderr,"[cpu-wall] jump=%u/%u frame=%d dir=%d tall=%d best_y=%u start_y=%u\n",
               (unsigned)cpu_wall_recovery_jumps,max_kicks,
@@ -969,7 +986,7 @@ static uint16_t cpu_companion_wall_recovery(const MmxCoopPlayer *f,
   /* First opportunity can precede the dedicated wall-slide action.
    * This is a ONE-SHOT buffered attempt per airborne recovery, not
    * continuous B spam; the $12 transition is required to count success. */
-  if (!wall_slide && near_wall && descending &&
+  if (!cpu_tall_wall_climb && !wall_slide && near_wall && descending &&
       !cpu_wall_buffer_attempted &&
       cpu_wall_recovery_jumps==0 &&
       !(f->input&MMX_CPU_JUMP) &&
@@ -1063,6 +1080,13 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
    * than mistaking an upward wall-kick action $12 for a downward slide. */
   bool descending=!grounded && cpu_wall_y_valid &&
                   y>(int)cpu_wall_last_y;
+  /* Measured apex: Zero has already climbed >=6 pixels since kick
+   * takeoff and his Y has stopped decreasing. A Y equality is enough;
+   * it is the last opportunity to release B before descent and slide. */
+  bool kick_apex=!grounded && cpu_tall_wall_climb &&
+      cpu_wall_recovery_jumps>0 && cpu_wall_y_valid &&
+      (int)cpu_tall_wall_kick_y-y>=6 &&
+      y>=(int)cpu_wall_last_y;
   if (grounded) cpu_wall_y_valid=false;
   else cpu_wall_y_valid=true;
   cpu_wall_last_y=(uint16_t)y;
@@ -1132,7 +1156,7 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
       cpu_tall_wall_best_y=(uint16_t)y;
     bool near=cpu_companion_wall_jump_near(ram,x,y,cpu_wall_direction);
     uint16_t wall_input=cpu_companion_wall_recovery(
-        follower,wall_slide,near,descending);
+        follower,wall_slide,near,descending,kick_apex);
     if (cpu_tall_wall_climb && getenv("MMX_CPU_TRACE") &&
         cpu_wall_recovery_jumps && cpu_tall_wall_trace_ticks<48) {
       unsigned tick=cpu_tall_wall_trace_ticks++;
