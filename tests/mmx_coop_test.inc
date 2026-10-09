@@ -1076,6 +1076,22 @@ static void coop_cpu_companion_checks(const char *fixture) {
   s=MmxCoopGetState();
   check((s.players[1].input&(SNES_PAD_RIGHT|SNES_PAD_B))==(SNES_PAD_RIGHT|SNES_PAD_B),
       "grounded CPU companion follows and jumps toward elevated leader");
+  /* A nearby valid enemy should trigger a Y fire pulse on the same frame
+   * as movement and jumping, without requiring a second controller. */
+  const unsigned enemy=0xe68, target_x=follow_x+72;
+  g_ram[enemy]=1;g_ram[enemy+14]=1;g_ram[enemy+0x27]=15;
+  g_ram[enemy+5]=(uint8_t)target_x;g_ram[enemy+6]=(uint8_t)(target_x>>8);
+  g_ram[enemy+8]=(uint8_t)follow_y;g_ram[enemy+9]=(uint8_t)(follow_y>>8);
+  g_ram[0xb9c]=0;
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check((s.players[1].input&(SNES_PAD_RIGHT|SNES_PAD_B|SNES_PAD_Y))==
+      (SNES_PAD_RIGHT|SNES_PAD_B|SNES_PAD_Y),
+      "CPU companion combines follow, jumping, and attacking");
+  g_ram[0xb9c]=1;
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check(!(s.players[1].input&SNES_PAD_Y),
+      "CPU companion releases fire between timed attacks");
+  g_ram[enemy]=0;
   s.players[1].body[0x2b]&=(uint8_t)~4;
   MmxCoopSetState(&s);
   MmxCoopPoll(0,0);s=MmxCoopGetState();
