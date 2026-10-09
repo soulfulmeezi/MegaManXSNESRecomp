@@ -1041,6 +1041,24 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
   int landing_distance=0, landing_rise=0;
   bool short_landing=edge && cpu_companion_gap_reachable(
       ram,x,feet,direction,&landing_distance,&landing_rise);
+  /* When X is already standing on a lower tier, a verified downward
+   * landing may be more useful than a blind horizontal jump or WAIT. */
+  int drop_distance=0,drop_depth=0;
+  bool lower_goal=edge && (leader->body[0x2b]&4)!=0 &&
+      dx*direction>40 &&
+      (int)word(leader->body+8)-y>=20 &&
+      (int)word(leader->body+8)-y<=112;
+  bool lower_landing=lower_goal && cpu_companion_lower_landing(
+      ram,x,feet,direction,(int)word(leader->body+8)+16,
+      &drop_distance,&drop_depth);
+  bool safe_drop=lower_landing && drop_distance<=72;
+  /* Farther lower ledges call for a normal jump (and perhaps dash),
+   * so the CPU has the lateral flight time to reach the floor. */
+  if (lower_landing && !short_landing && !safe_drop) {
+    short_landing=true;
+    landing_distance=drop_distance;
+    landing_rise=-drop_depth;
+  }
   int wall_distance=0;
   /* Look for a tall climbable wall while STILL on safe ground, not only
    * after the cliff sensor fires. Once within ~48px, proactively jump at
@@ -1070,11 +1088,12 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
   if ((edge || climb_takeoff || blocked || obstacle) && getenv("MMX_CPU_TRACE")) {
     static int last_log=-1000;
     if (snes_frame_counter-last_log>=90) {
-      fprintf(stderr,"[cpu-nav] edge=%d x=%d feet=%d dir=%d p1dx=%d p1dy=%d landing=%d dist=%d rise=%d raised=%d goalwall=%d wall_dist=%d grounded=%d cooldown=%u\n",
+      fprintf(stderr,"[cpu-nav] edge=%d x=%d feet=%d dir=%d p1dx=%d p1dy=%d landing=%d dist=%d rise=%d drop=%d drop_dist=%d drop_depth=%d raised=%d goalwall=%d wall_dist=%d grounded=%d cooldown=%u\n",
               (int)edge,x,feet,direction,dx,
               (int)word(leader->body+8)-y,(int)short_landing,
-              landing_distance,landing_rise,(int)raised_wall,
-              (int)goal_wall,wall_distance,(int)grounded,(unsigned)cpu_jump_cooldown_frames);
+              landing_distance,landing_rise,(int)safe_drop,drop_distance,
+              drop_depth,(int)raised_wall,(int)goal_wall,wall_distance,
+              (int)grounded,(unsigned)cpu_jump_cooldown_frames);
       last_log=snes_frame_counter;
     }
   }
@@ -1084,10 +1103,12 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
    * destination initiates a climb without waiting for X's jump timing. */
   MmxCpuMoveDecision move=MmxCoopCpuChooseMove(
       edge,short_landing,(raised_wall || goal_wall),climb_takeoff,
-      obstacle || blocked);
+      safe_drop,obstacle || blocked);
   if (move==MMX_CPU_MOVE_WAIT)
     return input&(uint16_t)~(MMX_CPU_LEFT|MMX_CPU_RIGHT|MMX_CPU_JUMP|MMX_CPU_DASH);
-  if (move==MMX_CPU_MOVE_WALK) return input;
+  /* A short safe DROP is deliberately NOT a jump: keep moving toward
+   * the floor X is standing on, and let the native fall/land logic run. */
+  if (move==MMX_CPU_MOVE_WALK || move==MMX_CPU_MOVE_DROP) return input;
 
   bool headroom=true;
   for (int offset=-6;offset<=6;offset+=6) {
@@ -1100,7 +1121,15 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
     if (edge) input&=(uint16_t)~(MMX_CPU_LEFT|MMX_CPU_RIGHT);
     return input;
   }
-  cpu_jump_hold_frames=12;
+  /* Hold native jump for 21 input frames in total (this frame plus
+   * 20 polls), allowing the game's variable-height jump to finish its
+   * ascent. Release earlier if native ground contact returns or a real
+   * airborne wall contact takes priority. */
+  cpu_jump_hold_frames=20;
+  cpu_jump_seen_airborne=false;
+  if (getenv("MMX_CPU_TRACE"))
+    fprintf(stderr,"[cpu-jump] takeoff x=%d y=%d mode=%d hold=21 landing_dist=%d rise=%d\n",
+            x,y,(int)move,landing_distance,landing_rise);
   /* A climb attempt can repeat shortly after a failed takeoff; ordinary
    * short-hop/ledge navigation retains the longer anti-spam cooldown. */
   cpu_jump_cooldown_frames=(move==MMX_CPU_MOVE_CLIMB) ? 24 : 48;
