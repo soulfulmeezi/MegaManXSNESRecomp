@@ -831,6 +831,18 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
   int wall_distance=0;
   bool raised_wall=edge && !short_landing &&
       cpu_companion_raised_wall(ram,x,feet,direction,&wall_distance);
+  /* Opt-in field diagnostics make real stage geometry inspectable without
+   * assuming a screenshot reveals the actual SNES collision classes.
+   * This never affects controller input or deterministic guest state. */
+  if (edge && getenv("MMX_CPU_TRACE")) {
+    static int last_log=-1000;
+    if (snes_frame_counter-last_log>=90) {
+      fprintf(stderr,"[cpu-nav] edge x=%d feet=%d dir=%d p1dx=%d short=%d raised=%d wall_dist=%d grounded=%d cooldown=%u\n",
+              x,feet,direction,dx,(int)short_landing,(int)raised_wall,
+              wall_distance,(int)grounded,(unsigned)cpu_jump_cooldown_frames);
+      last_log=snes_frame_counter;
+    }
+  }
   /* In the user's highway gap, the right-hand landing is UP a wall rather
    * than at the current foot level. Permit a deliberate jump into a detected
    * climbable wall, but never launch toward completely unseen/unsafe terrain. */
