@@ -1053,20 +1053,26 @@ static void coop_slime_checks(const char *fixture,uint8_t *start,uint8_t *expect
  * warning is resolved BEFORE ordinary left/right follow input is issued.
  * The actual sensors and jump physics still need a ROM-backed level test. */
 static void coop_cpu_sensing_checks(void) {
-  check(MmxCoopCpuChooseMove(true,true,false,false,false)==MMX_CPU_MOVE_JUMP,
+  check(MmxCoopCpuChooseMove(true,true,false,false,false,false)==MMX_CPU_MOVE_JUMP,
       "ground probe: missing ground with a landing means jump");
-  check(MmxCoopCpuChooseMove(true,false,false,false,true)==MMX_CPU_MOVE_WAIT,
+  check(MmxCoopCpuChooseMove(true,false,false,false,false,true)==MMX_CPU_MOVE_WAIT,
       "ground probe: an unsafe pit beats follow/stall movement");
-  check(MmxCoopCpuChooseMove(true,false,true,false,false)==MMX_CPU_MOVE_CLIMB,
+  check(MmxCoopCpuChooseMove(true,false,true,false,false,false)==MMX_CPU_MOVE_CLIMB,
       "ground probe: pit with climbable destination chooses wall approach");
-  check(MmxCoopCpuChooseMove(false,false,true,true,false)==MMX_CPU_MOVE_CLIMB,
+  check(MmxCoopCpuChooseMove(false,false,true,true,false,false)==MMX_CPU_MOVE_CLIMB,
       "wall probe: a close wall below a raised destination initiates climb");
-  check(MmxCoopCpuChooseMove(false,false,true,false,false)==MMX_CPU_MOVE_WALK,
+  check(MmxCoopCpuChooseMove(false,false,true,false,false,false)==MMX_CPU_MOVE_WALK,
       "wall probe: a distant wall doesn't force premature jump");
-  check(MmxCoopCpuChooseMove(false,false,false,false,true)==MMX_CPU_MOVE_JUMP,
+  check(MmxCoopCpuChooseMove(false,false,false,false,false,true)==MMX_CPU_MOVE_JUMP,
       "obstacle probe: a solid blocker triggers independent jump");
-  check(MmxCoopCpuChooseMove(false,false,false,false,false)==MMX_CPU_MOVE_WALK,
+  check(MmxCoopCpuChooseMove(false,false,false,false,false,false)==MMX_CPU_MOVE_WALK,
       "terrain clear: ordinary following remains intact");
+  check(MmxCoopCpuChooseMove(true,false,false,false,true,false)==MMX_CPU_MOVE_DROP,
+      "lower landing: safe near ledge permits walking down toward X");
+  check(MmxCoopCpuChooseMove(true,true,false,false,true,false)==MMX_CPU_MOVE_DROP,
+      "lower landing: short drop has priority over unnecessary upward jump");
+  check(MmxCoopCpuChooseMove(true,false,false,false,false,false)==MMX_CPU_MOVE_WAIT,
+      "lower landing: no verified ground still means wait at the lip");
   check(MmxCoopCpuChooseClimbDirection(0,24,0)==1,
       "high goal directly above: choose nearby right-hand wall");
   check(MmxCoopCpuChooseClimbDirection(0,0,20)==-1,
@@ -1127,20 +1133,21 @@ static void coop_cpu_companion_checks(const char *fixture) {
   check(autonomous_takeoff,
       "CPU independently starts an obstacle jump without player B");
   /* Simulate leaving the ground after takeoff. Holding the physical B
-   * button for the full ascent (rather than only the first grounded frame)
-   * is required to clear a pit in the native X1/X3 jump controller. */
+   * button through a full ascent (now 21 total frames, versus 13 earlier)
+   * is required to maximize the native X1/X3 jump controller. The hold
+   * must still stop immediately if the engine reports a real landing. */
   s.players[1].body[0x2b]&=(uint8_t)~4;
   MmxCoopSetState(&s);
   const unsigned enemy=0xe68, target_x=follow_x+72;
   g_ram[enemy]=1;g_ram[enemy+14]=1;g_ram[enemy+0x27]=15;
   g_ram[enemy+5]=(uint8_t)target_x;g_ram[enemy+6]=(uint8_t)(target_x>>8);
   g_ram[enemy+8]=(uint8_t)follow_y;g_ram[enemy+9]=(uint8_t)(follow_y>>8);
-  for (unsigned tick=0;tick<12;++tick) {
+  for (unsigned tick=0;tick<20;++tick) {
     g_ram[0xb9c]=(uint8_t)tick;
     MmxCoopPoll(0,0);s=MmxCoopGetState();
     check((s.players[1].input&(SNES_PAD_RIGHT|SNES_PAD_B))==
         (SNES_PAD_RIGHT|SNES_PAD_B) && !(s.players[1].input&SNES_PAD_Y),
-        "CPU companion holds jump during ascent without shooting");
+        "CPU companion holds jump through the longer ascent without shooting");
   }
   /* With B released and the follower still airborne, native auto-fire
    * resumes. Restoring ground contact during cooldown must not cause
