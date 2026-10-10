@@ -100,6 +100,7 @@ static void trace_event(unsigned kind,uint32_t pc,unsigned a,unsigned b,const Cp
 #define TRACE(kind,pc,a,b,cpu) do { if (g_mmx_coop_trace) trace_event(MMX_COOP_EV_##kind,pc,a,b,cpu); } while (0)
 #define TRACE_MARK(seat,flags) do { if (g_mmx_coop_trace) MmxCoopTraceMark(seat,MMX_COOP_RAN_##flags); } while (0)
 static bool scene_tick(uint8_t *r);
+static bool boss_fight(const uint8_t *r);
 static unsigned word(const uint8_t *p) {return p[0]|p[1]<<8;}
 static void putword(uint8_t *p,unsigned v) {p[0]=(uint8_t)v;p[1]=(uint8_t)(v>>8);}
 static unsigned weapon_view(const uint8_t *r,bool vertical) {
@@ -984,6 +985,31 @@ static bool cpu_companion_enemy_melee(const uint8_t *r,int x,int y,int dir) {
   }
   return false;
 }
+/* Prefer genuine major enemies, including tall minibosses beyond the
+ * regular 40px-high target band. Avoid arbitrary decorative objects. */
+typedef struct { bool found,boss; int direction,distance; } MmxCpuTarget;
+static MmxCpuTarget cpu_companion_attack_target(const uint8_t *r,int x,int y) {
+  MmxCpuTarget pick={0};
+  if (!r) return pick;
+  bool encounter=boss_fight(r);
+  int best_score=100000;
+  for (unsigned d=0xe68;d<0x1228;d+=64) {
+    if (!r[d] || !r[d+14] || !(r[d+0x27]&127)) continue;
+    int dx=(int)word(r+d+5)-x,dy=(int)word(r+d+8)-y;
+    unsigned kind=r[d+10];
+    bool major=MmxWidePolicy_IsBossEncounter((uint8_t)kind) ||
+        kind==0x26 || kind==0x67 || kind==0x69 || kind==0x01;
+    bool wide=major || encounter;
+    if (abs(dx)<10 || abs(dx)>(wide?220:152) ||
+        abs(dy)>(wide?112:40)) continue;
+    int score=abs(dx)+abs(dy)/2-(major?240:0);
+    if (score>=best_score) continue;
+    best_score=score;
+    pick.found=true;pick.boss=wide;
+    pick.direction=dx>0?1:-1;pick.distance=abs(dx);
+  }
+  return pick;
+}
 /* Highest-priority native motion is decided by cpu_companion_input() before
  * this attack/dash postprocessor. Holding charge never overrides jump or
  * wall-recovery directions, and any charged blast waits until a safe time
@@ -999,8 +1025,34 @@ static uint16_t cpu_companion_zero_combat(const uint8_t *r,
   int dx=(int)word(leader->body+5)-x;
   int dir=(input&MMX_CPU_RIGHT) ? 1 : (input&MMX_CPU_LEFT) ? -1 :
           (f->body[0x69]&64 ? 1 : -1);
-  bool target=cpu_companion_enemy_ahead(r,x,y,dir);
   bool recovering=cpu_wall_recovery_phase!=MMX_CPU_WALL_IDLE;
+  MmxCpuTarget target=cpu_companion_attack_target(r,x,y);
+  /* Aim at a nearby miniboss instead of blindly facing X. Only steer
+   * on verified solid ground; pit and wall-jump inputs have priority. */
+  bool safe_turn=target.found && target.boss && !recovering &&
+      (f->body[0x2b]&4)!=0 &&
+      !(input&(MMX_CPU_JUMP|MMX_CPU_DASH)) &&
+      !cpu_pit_wall_ticks && !cpu_air_route_ticks &&
+      cpu_companion_supported(r,x,y+16) &&
+      cpu_companion_supported(r,x+target.direction*12,y+16) &&
+      !cpu_companion_obstacle_ahead(r,x,y,target.direction);
+  if (safe_turn) {
+    input&=(uint16_t)~(MMX_CPU_LEFT|MMX_CPU_RIGHT);
+    input|=target.direction>0?MMX_CPU_RIGHT:MMX_CPU_LEFT;
+    dir=target.direction;
+  }
+  /* Facing comes from the prior native frame: turn before firing. */
+  bool aimed=target.found &&
+      ((f->body[0x69]&64)?1:-1)==target.direction;
+  if (target.found && target.boss && getenv("MMX_CPU_TRACE") &&
+      snes_frame_counter%45==0)
+    fprintf(stderr,
+        "[cpu-attack] target dir=%d face=%d dist=%d boss=%d charge=%u "
+        "turn=%d action=%u\n",
+        target.direction,(f->body[0x69]&64)?1:-1,
+        target.distance,(int)target.boss,
+        (unsigned)f->zero.charge,(int)safe_turn,
+        (unsigned)f->body[2]);
   if (f->zero.modern.enabled) {
     /* Modern mode: direct saber, not a chargeable X3 buster. */
     input&=(uint16_t)~MMX_CPU_FIRE;
@@ -1008,25 +1060,28 @@ static uint16_t cpu_companion_zero_combat(const uint8_t *r,
     if (!recovering && !cpu_zero_melee_cooldown &&
         cpu_companion_enemy_melee(r,x,y,dir)) {
       input|=MMX_CPU_FIRE;
-      cpu_zero_melee_cooldown=22;
+      cpu_zero_melee_cooldown=target.boss?16:22;
     }
   } else {
     /* X3 mode: build a powerful shot while running and jumping. Fire on
      * release only if an enemy is in front AND the native player isn't
      * busy with a wall-recovery or an earlier charged burst. With no
      * target, hold a full ready charge rather than waste it at empty air. */
-    bool ready=f->zero.charge>=141;
+    bool ready=f->zero.charge>=(target.boss?81u:141u);
     bool busy=f->zero.burst || f->zero.slash || f->zero.combo ||
               f->zero.swap_phase;
-    if (ready && target && !recovering && !busy &&
+    if (ready && target.found && aimed && !recovering && !busy &&
         (f->input&MMX_CPU_FIRE)) {
       /* Native X3 fires on RELEASE, not on a continuous unheld pad.
        * If a charge release was suppressed by an action/animation, rearm
        * Y for one tick so we can try again with a real input edge. */
       input&=(uint16_t)~MMX_CPU_FIRE;
       if (getenv("MMX_CPU_TRACE"))
-        fprintf(stderr,"[cpu-attack] Zero X3 charged release charge=%u x=%d y=%d\n",
-                (unsigned)f->zero.charge,x,y);
+        fprintf(stderr,
+            "[cpu-attack] Zero X3 release charge=%u x=%d y=%d "
+            "boss=%d dist=%d dir=%d\n",
+            (unsigned)f->zero.charge,x,y,
+            (int)target.boss,target.distance,target.direction);
     } else input|=MMX_CPU_FIRE;
   }
   /* Ground dash on VERIFIED clear terrain for fast catching up, including
@@ -1035,7 +1090,8 @@ static uint16_t cpu_companion_zero_combat(const uint8_t *r,
    * or through a solid wall. Air dash is exclusively Modern mode and
    * requires separate terrain-safe flight planning. */
   bool safe_dash=false;
-  if ((f->body[0x2b]&4) && dx*dir>112 &&
+  if (!(target.found && target.boss) &&
+      (f->body[0x2b]&4) && dx*dir>112 &&
       (input&(dir>0?MMX_CPU_RIGHT:MMX_CPU_LEFT)) &&
       cpu_companion_supported(r,x,y+16) &&
       cpu_companion_supported(r,x+dir*28,y+16) &&
@@ -1935,6 +1991,27 @@ void MmxCoopPoll(uint16_t p1, uint16_t p2) {
     }
     previous_x_action=xp->body[2];
     previous_zero_action=zp->body[2];
+    /* Passive probe for the reported miniboss floor fall; leave native
+     * terrain/camera physics unchanged until we can locate the cause. */
+    if (snes_frame_counter%12==0 &&
+        (int)word(zp->body+8)>(int)word(xp->body+8)+28 &&
+        !(zp->body[0x2b]&4)) {
+      int zfeet=(int)word(zp->body+8)+16;
+      int zx=(int)word(zp->body+5);
+      fprintf(stderr,
+          "[cpu-floor] frame=%d zx=%d zy=%u xy=%u "
+          "action=%u vy=%d near=%d below=%d "
+          "tile=%u boss=%d cam_bottom=%d refill=%u scene=%u mode=%u/%u/%u\n",
+          snes_frame_counter,zx,word(zp->body+8),word(xp->body+8),
+          (unsigned)zp->body[2],(int16_t)word(zp->body+0x1c),
+          (int)MmxWeaponsTerrainSolid(g_ram,zx,zfeet+2,true,NULL),
+          (int)floor_below(g_ram,zp->body),
+          MmxWeaponsTerrainClass(g_ram,zx,zfeet+2),
+          (int)boss_fight(g_ram),(int)word(g_ram+0x1e5c)+224,
+          (unsigned)g_ram[0x1f19],(unsigned)state.scene_owner,
+          (unsigned)g_ram[0xd1],(unsigned)g_ram[0xd2],
+          (unsigned)g_ram[0xd3]);
+    }
     /* Compare the controlled character with the CPU on the SAME
      * frame. Repeated positions with cpu_dir=R show native movement
      * has stalled despite a held-right controller command. */
