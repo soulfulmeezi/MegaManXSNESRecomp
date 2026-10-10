@@ -69,6 +69,15 @@ static inline void MmxCoopImportLegacy(MmxCoopState *out, const uint8_t *bytes) 
 static inline int MmxCoopCpuFollowDirection(int target_dx) {
   return target_dx>40 ? 1 : target_dx< -40 ? -1 : 0;
 }
+/* Once a terrain-verified crossing is launched, the midair flight follows
+ * its committed takeoff heading until actual landing or wall contact.
+ * The ordinary 40px proximity deadzone must not cancel a jump in flight. */
+static inline int MmxCoopCpuAirRouteDirection(
+    int target_dx, int committed_dir, bool airborne) {
+  if (airborne && committed_dir)
+    return committed_dir>0 ? 1 : -1;
+  return MmxCoopCpuFollowDirection(target_dx);
+}
 /* Bound the committed wall approach through the entire native dash,
  * jump, descent and possible long wall approach. Wall contact or landing
  * still terminates the route immediately. Keep within uint8_t range. */
