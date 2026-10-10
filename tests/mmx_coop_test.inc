@@ -1537,6 +1537,37 @@ static void coop_cpu_companion_checks(const char *fixture) {
   MmxCoopPoll(0,0);s=MmxCoopGetState();
   check(!(s.players[1].input&SNES_PAD_Y),
       "miniboss: release full 201 charge while facing it");
+  /* Fully charged X3 combo uses NEW Y edges after each native burst.
+   * AI must release Y during the burst and retrigger only when ready. */
+  s.players[1].zero.charge=0;
+  s.players[1].zero.combo=1;
+  s.players[1].zero.burst=1;
+  s.players[1].zero.saber_ready=1;
+  s.players[1].input=SNES_PAD_Y;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check(!(s.players[1].input&SNES_PAD_Y),
+      "X3 boss burst: releases Y to arm next attack edge");
+  s.players[1].zero.burst=0;
+  s.players[1].input=0;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check((s.players[1].input&SNES_PAD_Y)!=0,
+      "X3 boss combo: issues a new Y press for second shot");
+  s.players[1].zero.combo=2;
+  s.players[1].zero.burst=0;
+  s.players[1].zero.shot_mask=0;
+  s.players[1].body[0x7d]=0; /* WRAM $C25: native saber beam occupancy. */
+  s.players[1].input=SNES_PAD_Y;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check(!(s.players[1].input&SNES_PAD_Y),
+      "X3 saber combo: releases Y before the final input edge");
+  s.players[1].input=0;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check((s.players[1].input&SNES_PAD_Y)!=0,
+      "X3 saber combo: fresh Y edge after beam slots clear");
   g_ram[enemy]=0;g_ram[enemy+10]=0;
   MmxCoopSetSwitchTrigger(false);
   MmxCoopSetCpuCompanion(false);
