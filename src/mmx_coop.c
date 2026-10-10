@@ -1063,6 +1063,25 @@ static uint16_t cpu_companion_zero_combat(const uint8_t *r,
       cpu_zero_melee_cooldown=target.boss?16:22;
     }
   } else {
+    /* Native X3 full charge is an entire three-stage attack: 201-tick
+     * first burst, second shot on the next Y PRESS EDGE after burst,
+     * then saber follow-up on another new press once beams disappear.
+     * Holding Y throughout the combo never produces those edges. */
+    if (f->zero.combo || f->zero.burst) {
+      bool next_ready=target.found && aimed && !recovering &&
+          !f->zero.burst && !f->zero.slash &&
+          (f->zero.combo==1 ||
+           (f->zero.combo==2 && f->zero.saber_ready &&
+            !f->zero.shot_mask && !f->body[0x7d]));
+      input&=(uint16_t)~MMX_CPU_FIRE;
+      if (next_ready && !(f->input&MMX_CPU_FIRE)) {
+        input|=MMX_CPU_FIRE;
+        if (getenv("MMX_CPU_TRACE"))
+          fprintf(stderr,
+              "[cpu-attack] Zero X3 boss combo step=%u x=%d y=%d\n",
+              (unsigned)f->zero.combo,x,y);
+      }
+    } else {
     /* Alternate native HOLD-Y and RELEASE-Y. Small ordinary targets get
      * a shot at 21 ticks, major bosses a full 201-tick X3 charge.
      * Do not appear idle by hoarding a charged buster in an empty room. */
@@ -1086,6 +1105,7 @@ static uint16_t cpu_companion_zero_combat(const uint8_t *r,
       /* Unable to turn? Discard the small charge, never fill to 201. */
       input&=(uint16_t)~MMX_CPU_FIRE;
     } else input|=MMX_CPU_FIRE;
+    }
   }
   /* Ground dash on VERIFIED clear terrain for fast catching up, including
    * run-up toward a far raised climb. The native game decides the actual
