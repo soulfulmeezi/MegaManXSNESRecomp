@@ -104,6 +104,13 @@ static inline bool MmxCoopCpuCrumbleWallAllowed(
   return grounded && first_gap>=20 && first_gap<=72 &&
          !stable_landing && verified_wall;
 }
+/* A route toward a verified higher platform needs the full native
+ * wall-kick budget, even when the leader is only 32-95px above.
+ * Accidental wall slides without an upper destination still use 2 kicks. */
+static inline bool MmxCoopCpuFullWallClimb(bool pit_wall_arrival,
+                                            bool verified_upper_goal) {
+  return pit_wall_arrival || verified_upper_goal;
+}
 /* A long climb may need a brief OUTWARD kick, just like a player.
  * Keep ordinary slides and the verified wall climb as the default. */
 static inline uint8_t MmxCoopCpuWallPushFrames(bool tall, bool arc_mode) {
