@@ -1071,6 +1071,14 @@ static void coop_cpu_sensing_checks(void) {
       "pit route persists through a long airborne wall approach");
   check(MmxCoopCpuPitApproachTicks(76)>=MmxCoopCpuPitApproachTicks(116)-40,
       "pit route does not expire immediately after a short dash");
+  check(MmxCoopCpuCrumbleJumpAllowed(true,48,104,true),
+      "breaking highway: jump early toward verified landing");
+  check(!MmxCoopCpuCrumbleJumpAllowed(true,48,0,true) &&
+        !MmxCoopCpuCrumbleJumpAllowed(true,96,128,true),
+      "breaking highway: do not invent a landing or jump too far ahead");
+  check(!MmxCoopCpuCrumbleJumpAllowed(false,48,104,true) &&
+        !MmxCoopCpuCrumbleJumpAllowed(true,48,104,false),
+      "breaking highway: no jump while airborne or under low ceiling");
   check(MmxCoopCpuWallPushFrames(true,true)==5,
       "wide-arc tall climb briefly steers away before returning");
   check(MmxCoopCpuWallPushFrames(true,false)==0 &&
