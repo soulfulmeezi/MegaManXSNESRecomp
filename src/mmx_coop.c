@@ -1247,8 +1247,7 @@ static uint16_t cpu_companion_wall_recovery(const MmxCoopPlayer *f,
 /* Feed native co-op pad input rather than moving sprites directly.
  * Offline-only host timers preserve variable-height ground jumps and allow
  * fresh B press edges for wall kicks. No co-op save ABI or netplay changes. */
-static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
-                                     uint16_t leader_pad) {
+static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat) {
   const MmxCoopPlayer *leader=&state.players[controlled_seat],
                       *follower=&state.players[controlled_seat^1];
   if (!ram || !state.initialized || state.menu_owner || state.scene_owner ||
@@ -1259,14 +1258,10 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
     return 0;
   }
   int dx=(int)word(leader->body+5)-(int)word(follower->body+5);
-  int direction=dx>40 ? 1 : dx< -40 ? -1 : 0;
-  /* In couch CPU mode the other character may get ahead of the human.
-   * If X is moving TOWARD that character, honor the intended stage route
-   * instead of forcing Zero to turn around and ignore the obstacle ahead.
-   * Keep the override local to one shared-screen width. */
-  int intent=(leader_pad&MMX_CPU_RIGHT) && !(leader_pad&MMX_CPU_LEFT) ? 1 :
-             (leader_pad&MMX_CPU_LEFT) && !(leader_pad&MMX_CPU_RIGHT) ? -1 : 0;
-  if (intent && (dx*intent)<-40 && abs(dx)<=176) direction=intent;
+  /* Follow the leader's ACTUAL position, not their controller direction.
+   * Briefly tapping left while X is still to Zero's right should not
+   * reverse Zero's approach. Wall-kick recovery is a separate state. */
+  int direction=MmxCoopCpuFollowDirection(dx);
   int x=(int)word(follower->body+5),y=(int)word(follower->body+8);
   /* Horizontal follow reaches its dead zone even when P1 is standing on
    * a high platform. Search BOTH sides for an actual close wall before
@@ -1493,6 +1488,18 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
     input|=MMX_CPU_DASH;
     --cpu_cliff_dash_frames;
   } else if (grounded) cpu_cliff_dash_frames=0;
+  /* Releasing dash must not release the route's horizontal steering.
+   * The confirmed pit-wall direction is maintained until actual wall
+   * contact, landing, or a bounded route timeout. */
+  if (cpu_pit_wall_ticks && !grounded && cpu_pit_wall_direction) {
+    input&=(uint16_t)~(MMX_CPU_LEFT|MMX_CPU_RIGHT);
+    input|=cpu_pit_wall_direction>0 ? MMX_CPU_RIGHT : MMX_CPU_LEFT;
+    if (getenv("MMX_CPU_TRACE") && !cpu_cliff_dash_frames &&
+        snes_frame_counter%24==0)
+      fprintf(stderr,
+          "[cpu-pit] forward glide x=%d y=%d dir=%d action=%u\n",
+          x,y,(int)cpu_pit_wall_direction,(unsigned)follower->body[2]);
+  }
   /* Shoot nearby enemies outside jump takeoff/kick phases. */
   int facing=direction ? direction : (follower->body[0x69]&64 ? 1 : -1);
   if (ram[0xb9c]%12==0 && cpu_companion_enemy_ahead(ram,x,y,facing))
@@ -1617,9 +1624,12 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
       cpu_pit_wall_ticks=pit_wall_distance>=96 ? 100 : 72;
       cpu_pit_wall_direction=(int8_t)direction;
       cpu_pit_wall_was_airborne=false;
-      /* A native jump buys the airtime to reach a distant LOWER wall.
-       * Dash is available only for Zero or upgraded X, not injected speed. */
-      cpu_jump_hold_frames=20;
+      /* Standard crossing holds native B for a high dash-jump.
+       * Optional drop test taps B only on takeoff for a low arc:
+       * descend toward the far wall, not over the upper platform. */
+      const char *pit_style=getenv("MMX_CPU_PIT_STYLE");
+      bool low_arc=pit_style && strcmp(pit_style,"drop")==0;
+      cpu_jump_hold_frames=low_arc ? 0 : 20;
       cpu_jump_direction=(int8_t)direction;
       cpu_jump_seen_airborne=false;
       cpu_jump_cooldown_frames=36;
@@ -1631,7 +1641,8 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
       }
       if (getenv("MMX_CPU_TRACE"))
         fprintf(stderr,
-            "[cpu-pit] jump toward opposite wall x=%d feet=%d dir=%d wall_dist=%d wall_depth=%d dash=%d\n",
+            "[cpu-pit] %s toward opposite wall x=%d feet=%d dir=%d wall_dist=%d wall_depth=%d dash=%d\n",
+            low_arc?"low-arc drop":"jump",
             x,feet,direction,pit_wall_distance,pit_wall_depth,
             (int)((takeoff&MMX_CPU_DASH)!=0));
       return takeoff;
@@ -1741,7 +1752,7 @@ void MmxCoopPoll(uint16_t p1, uint16_t p2) {
     cpu_swap_trigger_down=held;
     inputs[cpu_human_seat]=p1&4095;
     unsigned ai=cpu_human_seat^1;
-    inputs[ai]=cpu_companion_input(g_ram,cpu_human_seat,p1);
+    inputs[ai]=cpu_companion_input(g_ram,cpu_human_seat);
     if (state.initialized && !state.menu_owner && !state.scene_owner &&
         !state.stage_pending)
       inputs[ai]=cpu_companion_zero_combat(g_ram,&state.players[ai],
