@@ -82,7 +82,11 @@ static bool cpu_air_route_was_airborne;
 /* Host-only cache of live 16px collision cells near the Highway CPU.
  * It detects REAL terrain-map changes, never guessing from graphics.
  * Used only when MMX_CPU_CRUMBLE=1 and stage id 0 (intro highway). */
-typedef struct {int16_t x,y;uint8_t tile,valid;} MmxCpuGroundCell;
+typedef struct {
+  int16_t x,y;
+  uint8_t tile,valid,support,lost;
+  uint32_t lost_frame;
+} MmxCpuGroundCell;
 static MmxCpuGroundCell cpu_ground_cells[128];
 static uint16_t cpu_last_x;
 static int8_t cpu_jump_direction, cpu_wall_direction, cpu_stall_direction;
@@ -713,15 +717,46 @@ static void cpu_companion_watch_road_cell(const uint8_t *ram,int x,int y) {
                  ((unsigned)cell_y>>4)*11u)&127u;
   MmxCpuGroundCell *cell=&cpu_ground_cells[hash];
   unsigned tile=MmxWeaponsTerrainClass(ram,cell_x,cell_y);
-  if (cell->valid && cell->x==cell_x && cell->y==cell_y &&
-      cell->tile!=tile && getenv("MMX_CPU_TRACE")) {
-    fprintf(stderr,
-        "[cpu-crumble-map] frame=%d x=%d y=%d old=%u new=%u\n",
-        snes_frame_counter,cell_x,cell_y,
-        (unsigned)cell->tile,tile);
+  bool support=cpu_companion_supported(ram,cell_x,(cell_y&~15)+1);
+  bool same=cell->valid && cell->x==cell_x && cell->y==cell_y;
+  bool lost=same && cell->support && !support;
+  if (lost) {
+    cell->lost=1;
+    cell->lost_frame=(uint32_t)snes_frame_counter;
   }
+  if (same && (cell->tile!=tile || cell->support!=(uint8_t)support) &&
+      getenv("MMX_CPU_TRACE"))
+    fprintf(stderr,
+        "[cpu-crumble-map] frame=%d x=%d y=%d old=%u new=%u "
+        "support=%u->%d lost=%d\n",
+        snes_frame_counter,cell_x,cell_y,(unsigned)cell->tile,tile,
+        (unsigned)cell->support,(int)support,(int)lost);
+  if (!same) cell->lost=0;
   cell->valid=1;cell->x=(int16_t)cell_x;
   cell->y=(int16_t)cell_y;cell->tile=(uint8_t)tile;
+  cell->support=(uint8_t)support;
+}
+/* A crumbling tile may disappear when X touches it before Zero arrives.
+ * Remember genuine lost support for a short period: this is independent
+ * of which player caused it and never infers collapse from sprites. */
+static bool cpu_companion_recent_road_loss(int x,int feet,int dir) {
+  if (!dir) return false;
+  for (unsigned i=0;i<sizeof(cpu_ground_cells)/sizeof(cpu_ground_cells[0]);++i) {
+    const MmxCpuGroundCell *cell=&cpu_ground_cells[i];
+    int ahead=(cell->x-x)*dir;
+    if (cell->valid && cell->lost &&
+        (uint32_t)snes_frame_counter-cell->lost_frame<=150u &&
+        ahead>=-16 && ahead<=176 && abs((int)cell->y-feet)<=32)
+      return true;
+  }
+  return false;
+}
+static int cpu_companion_early_missing_ground(
+    const uint8_t *ram,int x,int feet,int dir) {
+  if (!ram || !dir) return 0;
+  for (int d=20;d<=72;d+=4)
+    if (!cpu_companion_supported(ram,x+dir*d,feet)) return d;
+  return 0;
 }
 /* On the intro Highway, begin sensing the NEXT hole while still 20-72px
  * away, rather than waiting until the ordinary 20px edge probe. Cracked
@@ -732,12 +767,8 @@ static bool cpu_companion_crumble_route(const uint8_t *ram,int x,int feet,
                                         int dir,int *gap_out,int *landing_out) {
   if (!ram || !dir || ram[0x1f7a]!=0 ||
       !cpu_companion_supported(ram,x,feet)) return false;
-  int first_gap=0;
-  for (int d=20;d<=72;d+=4) {
-    if (!cpu_companion_supported(ram,x+dir*d,feet)) {
-      first_gap=d;break;
-    }
-  }
+  int first_gap=cpu_companion_early_missing_ground(
+      ram,x,feet,dir);
   if (!first_gap) return false;
   for(int d=first_gap+24;d<=176;d+=8) {
     int sx=x+dir*d;
@@ -1433,6 +1464,19 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
   int dx=(int)word(leader->body+5)-(int)word(follower->body+5);
   int x=(int)word(follower->body+5),y=(int)word(follower->body+8);
   bool grounded=(follower->body[0x2b]&4)!=0;
+  /* X can trigger a collapse while Zero is far away or in the air.
+   * Sample live collision around BOTH players each AI frame. */
+  bool crumble_enabled=getenv("MMX_CPU_CRUMBLE")!=NULL &&
+      ram[0x1f7a]==0;
+  if (crumble_enabled) {
+    int look=dx>0?1:dx<0?-1:(follower->body[0x69]&64?1:-1);
+    int leader_x=(int)word(leader->body+5);
+    int leader_feet=(int)word(leader->body+8)+16;
+    for (int d=-16;d<=160;d+=16)
+      cpu_companion_watch_road_cell(ram,x+look*d,y+18);
+    for (int d=-48;d<=48;d+=16)
+      cpu_companion_watch_road_cell(ram,leader_x+d,leader_feet+2);
+  }
   /* While an approved gap/wall jump is airborne, preserve its route
    * independently of the leader's moving 40px follow deadzone. */
   if (cpu_air_route_ticks) {
@@ -1753,10 +1797,10 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
   /* Experimental breaking-ground awareness: inspect the CURRENT map
    * near Zero and confirm a distinct landing beyond the hole. The scan
    * is enabled only when requested and only on the introductory highway. */
-  bool crumble_enabled=getenv("MMX_CPU_CRUMBLE")!=NULL &&
-      ram[0x1f7a]==0;
-  if (crumble_enabled) for(int d=-16;d<=128;d+=16)
-    cpu_companion_watch_road_cell(ram,x+direction*d,feet+2);
+  int crumble_first_gap=crumble_enabled?
+      cpu_companion_early_missing_ground(ram,x,feet,direction):0;
+  bool crumble_lost=crumble_enabled &&
+      cpu_companion_recent_road_loss(x,feet,direction);
   if (crumble_enabled && grounded && getenv("MMX_CPU_TRACE") &&
       snes_frame_counter%90==0) {
     fprintf(stderr,
@@ -1871,7 +1915,14 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
    * planner. All other unverified pits retain their WAIT behavior. */
   int pit_wall_distance=0,pit_wall_depth=0;
   bool pit_enabled=getenv("MMX_CPU_PIT_WALL")!=NULL;
-  bool pit_wall_candidate=pit_enabled && edge &&
+  /* A destroyed section can reveal a climbable far wall while the
+   * ordinary edge probe is still 20+ pixels away. Do not infer safety
+   * from a falling graphic: demand actual open terrain and solid wall. */
+  bool crumble_wall_warning=crumble_enabled &&
+      crumble_first_gap>=20 && crumble_first_gap<=72 &&
+      grounded && !short_landing && !safe_drop;
+  bool pit_wall_candidate=pit_enabled &&
+      (edge || crumble_wall_warning) &&
       !short_landing && !safe_drop &&
       cpu_companion_opposite_pit_wall(
           ram,x,feet,direction,&pit_wall_distance,&pit_wall_depth);
@@ -1879,11 +1930,23 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
       (ram[0x1f99]&8)!=0;
   /* Without native dash ability use a shorter, conservative approach.
    * A wall alone is not proof that every character can fly far enough. */
+  bool crumble_verified_wall=crumble_wall_warning &&
+      MmxCoopCpuCrumbleWallAllowed(
+          grounded,crumble_first_gap,false,pit_wall_candidate);
   bool pit_wall_route=pit_wall_candidate &&
       !raised_wall && !goal_wall &&
       pit_wall_distance<=(pit_can_dash?152:104) &&
-      (leader->body[0x2b]&4)!=0 &&
+      ((leader->body[0x2b]&4)!=0 ||
+       (crumble_verified_wall && crumble_lost)) &&
       dx*direction>pit_wall_distance+24;
+  if (crumble_wall_warning && getenv("MMX_CPU_TRACE") &&
+      snes_frame_counter%24==0)
+    fprintf(stderr,
+        "[cpu-crumble-wall] frame=%d x=%d feet=%d hole=%d "
+        "changed=%d verified=%d wall_dist=%d depth=%d route=%d\n",
+        snes_frame_counter,x,feet,crumble_first_gap,
+        (int)crumble_lost,(int)crumble_verified_wall,
+        pit_wall_distance,pit_wall_depth,(int)pit_wall_route);
   if (pit_enabled && edge && getenv("MMX_CPU_TRACE")) {
     static int last_pit_scan=-1000;
     if (snes_frame_counter-last_pit_scan>=90) {
