@@ -70,6 +70,12 @@ static bool cpu_wall_escape_reported;
 static uint8_t cpu_pit_wall_ticks;
 static int8_t cpu_pit_wall_direction;
 static bool cpu_pit_wall_was_airborne;
+/* A separate host-only steering latch for normal gap / raised-wall
+ * jumps. Unlike the explicit pit drop, these formerly forgot forward
+ * input as soon as the follower entered the 40px leader deadzone. */
+static uint8_t cpu_air_route_ticks;
+static int8_t cpu_air_route_dir;
+static bool cpu_air_route_was_airborne;
 static uint16_t cpu_last_x;
 static int8_t cpu_jump_direction, cpu_wall_direction, cpu_stall_direction;
 static unsigned starting_character;
@@ -385,6 +391,8 @@ static void cpu_companion_reset_motion(void) {
   cpu_wall_escape_reported=false;
   cpu_pit_wall_ticks=0;cpu_pit_wall_direction=0;
   cpu_pit_wall_was_airborne=false;
+  cpu_air_route_ticks=0;cpu_air_route_dir=0;
+  cpu_air_route_was_airborne=false;
 }
 void MmxCoopReset(void) {
   cpu_companion_reset_motion();cpu_human_seat=cpu_swap_trigger_down=cpu_rescue_cooldown=0;
@@ -1269,11 +1277,32 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
     return 0;
   }
   int dx=(int)word(leader->body+5)-(int)word(follower->body+5);
-  /* Follow the leader's ACTUAL position, not their controller direction.
-   * Briefly tapping left while X is still to Zero's right should not
-   * reverse Zero's approach. Wall-kick recovery is a separate state. */
-  int direction=MmxCoopCpuFollowDirection(dx);
   int x=(int)word(follower->body+5),y=(int)word(follower->body+8);
+  bool grounded=(follower->body[0x2b]&4)!=0;
+  /* While an approved gap/wall jump is airborne, preserve its route
+   * independently of the leader's moving 40px follow deadzone. */
+  if (cpu_air_route_ticks) {
+    if (!grounded) cpu_air_route_was_airborne=true;
+    if (grounded && cpu_air_route_was_airborne) {
+      if (getenv("MMX_CPU_TRACE"))
+        fprintf(stderr,"[cpu-air-route] landed x=%d y=%d\n",x,y);
+      cpu_air_route_ticks=0;cpu_air_route_dir=0;
+      cpu_air_route_was_airborne=false;
+    } else {
+      --cpu_air_route_ticks;
+      if (!cpu_air_route_ticks) {
+        if (getenv("MMX_CPU_TRACE"))
+          fprintf(stderr,"[cpu-air-route] expired x=%d y=%d airborne=%d\n",
+                  x,y,(int)!grounded);
+        cpu_air_route_dir=0;
+        cpu_air_route_was_airborne=false;
+      }
+    }
+  }
+  /* Ordinary following still uses actual leader position. A committed
+   * native jump gets its own direction while airborne. */
+  int direction=MmxCoopCpuAirRouteDirection(
+      dx,cpu_air_route_ticks ? cpu_air_route_dir : 0,!grounded);
   /* Horizontal follow reaches its dead zone even when P1 is standing on
    * a high platform. Search BOTH sides for an actual close wall before
    * choosing a route: this is not a reaction to P1's B/jump input.
@@ -1297,7 +1326,6 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
       climb_face=direction>0 ? right : left;
     }
   }
-  bool grounded=(follower->body[0x2b]&4)!=0;
   /* Keep targeting the opposite wall through descent, even if the
    * usual horizontal follow deadzone is crossed in midair. */
   if (cpu_pit_wall_ticks) {
@@ -1347,6 +1375,13 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
   } else cpu_stall_ticks=0;
   cpu_last_x=(uint16_t)x;cpu_stall_direction=(int8_t)direction;
   uint16_t input=direction>0 ? MMX_CPU_RIGHT : direction<0 ? MMX_CPU_LEFT : 0;
+  if (cpu_air_route_ticks && !grounded && getenv("MMX_CPU_TRACE") &&
+      snes_frame_counter%12==0)
+    fprintf(stderr,
+        "[cpu-air-route] steering x=%d y=%d dx=%d dir=%d action=%u pad=%c ticks=%u\n",
+        x,y,dx,direction,(unsigned)follower->body[2],
+        (input&MMX_CPU_RIGHT)?'R':(input&MMX_CPU_LEFT)?'L':'-',
+        (unsigned)cpu_air_route_ticks);
   if (cpu_jump_cooldown_frames) --cpu_jump_cooldown_frames;
   /* This is the highest-priority locomotion state. A landing exits
    * immediately, even when only one wall jump has been performed. It
@@ -1374,6 +1409,10 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
   if (!grounded && (wall_slide || touching_wall ||
                     cpu_wall_recovery_phase!=MMX_CPU_WALL_IDLE)) {
     if (cpu_wall_recovery_phase==MMX_CPU_WALL_IDLE) {
+      if (cpu_air_route_ticks && getenv("MMX_CPU_TRACE"))
+        fprintf(stderr,"[cpu-air-route] wall contact x=%d y=%d\n",x,y);
+      cpu_air_route_ticks=0;cpu_air_route_dir=0;
+      cpu_air_route_was_airborne=false;
       cpu_wall_direction=(int8_t)(
           touching_wall ? touching_wall :
           direction ? direction : (follower->body[0x69]&64 ? 1 : -1));
@@ -1641,6 +1680,8 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
           MmxWeaponsTerrainSolid(ram,x+offset,y-35,false,NULL))
         headroom=false;
     if (headroom && !cpu_jump_cooldown_frames) {
+      cpu_air_route_ticks=0;cpu_air_route_dir=0;
+      cpu_air_route_was_airborne=false;
       cpu_pit_wall_ticks=MmxCoopCpuPitApproachTicks(pit_wall_distance);
       cpu_pit_wall_direction=(int8_t)direction;
       cpu_pit_wall_was_airborne=false;
@@ -1698,6 +1739,18 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
    * airborne wall contact takes priority. */
   cpu_jump_hold_frames=20;
   cpu_jump_seen_airborne=false;
+  /* An ordinary jump that starts at a verified gap or raised-wall route
+   * must keep steering through the FALL, even after B/dash are released
+   * and the leader passes inside the usual follow deadzone. */
+  if (edge || raised_wall || goal_wall) {
+    cpu_air_route_ticks=120;
+    cpu_air_route_dir=(int8_t)direction;
+    cpu_air_route_was_airborne=false;
+    if (getenv("MMX_CPU_TRACE"))
+      fprintf(stderr,
+          "[cpu-air-route] committed x=%d y=%d dir=%d edge=%d wall=%d\n",
+          x,y,direction,(int)edge,(int)(raised_wall||goal_wall));
+  }
   if (getenv("MMX_CPU_TRACE"))
     fprintf(stderr,"[cpu-jump] takeoff x=%d y=%d mode=%d hold=21 landing_dist=%d rise=%d\n",
             x,y,(int)move,landing_distance,landing_rise);
