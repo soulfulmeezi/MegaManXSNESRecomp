@@ -1824,6 +1824,48 @@ void MmxCoopPoll(uint16_t p1, uint16_t p2) {
           (int)((c->input&MMX_CPU_JUMP)!=0),
           (unsigned)c->input,hx-cx);
     }
+    /* Detect loss of forward movement WHILE the native body is alive.
+     * This distinguishes controller release from a terrain/physics stall,
+     * and avoids mistaking a stationary death sprite for a navigation bug. */
+    static int last_cpu_x=-1,air_stall_frames=0,last_cpu_action=-1;
+    int cx_now=(int)word(c->body+5),cy_now=(int)word(c->body+8);
+    bool cpu_alive=c->status==MMX_COOP_ALIVE &&
+        (c->body[0x27]&127)!=0 && c->body[2]!=12;
+    bool forward=(c->input&(MMX_CPU_LEFT|MMX_CPU_RIGHT))!=0;
+    if (cpu_alive && forward && !(c->body[0x2b]&4) &&
+        cx_now==last_cpu_x) {
+      if (air_stall_frames<60) ++air_stall_frames;
+    } else air_stall_frames=0;
+    if (air_stall_frames==12)
+      fprintf(stderr,
+          "[cpu-air-stall] frame=%d x=%d y=%d action=%u pad=%03x "
+          "vx=%d vy=%d hp=%u floor=%d camera_bottom=%d "
+          "pit_ticks=%u wall_phase=%u refill=%u scene=%u\n",
+          snes_frame_counter,cx_now,cy_now,(unsigned)c->body[2],
+          (unsigned)c->input,(int16_t)word(c->body+0x1a),
+          (int16_t)word(c->body+0x1c),
+          (unsigned)(c->body[0x27]&127),
+          (int)floor_below(g_ram,c->body),
+          (int)word(g_ram+0x1e5c)+224,
+          (unsigned)cpu_pit_wall_ticks,
+          (unsigned)cpu_wall_recovery_phase,
+          (unsigned)g_ram[0x1f19],(unsigned)state.scene_owner);
+    if (c->body[2]==12 && last_cpu_action!=12)
+      fprintf(stderr,
+          "[cpu-death] frame=%d character=%s x=%d y=%d hp=%u "
+          "status=%u camera_bottom=%d floor_below=%d "
+          "world_mode=%u/%u/%u refill=%u script=%u "
+          "pit_ticks=%u\n",
+          snes_frame_counter,
+          c->character==MMX_COOP_ZERO?"Zero":"X",
+          cx_now,cy_now,(unsigned)(c->body[0x27]&127),
+          (unsigned)c->status,(int)word(g_ram+0x1e5c)+224,
+          (int)floor_below(g_ram,c->body),
+          (unsigned)g_ram[0xd1],(unsigned)g_ram[0xd2],
+          (unsigned)g_ram[0xd3],(unsigned)g_ram[0x1f19],
+          (unsigned)state.scene_owner,(unsigned)cpu_pit_wall_ticks);
+    last_cpu_action=c->body[2];
+    last_cpu_x=cx_now;
     previous_action=action;
     previous_seat=cpu_human_seat;
   }
