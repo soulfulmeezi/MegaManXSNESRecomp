@@ -1053,6 +1053,49 @@ static void coop_slime_checks(const char *fixture,uint8_t *start,uint8_t *expect
  * warning is resolved BEFORE ordinary left/right follow input is issued.
  * The actual sensors and jump physics still need a ROM-backed level test. */
 static void coop_cpu_sensing_checks(void) {
+  check(MmxCoopCpuFollowDirection(120)==1,
+      "follow X standing right even when X moves left");
+  check(MmxCoopCpuFollowDirection(-120)==-1,
+      "follow X standing left even when X moves right");
+  check(MmxCoopCpuFollowDirection(30)==0,
+      "follow deadzone avoids jitter at short distance");
+  check(MmxCoopCpuAirRouteDirection(11,1,true)==1,
+      "airborne crossing keeps right despite 11px leader deadzone");
+  check(MmxCoopCpuAirRouteDirection(-11,1,true)==1,
+      "airborne crossing cannot reverse from small leader movement");
+  check(MmxCoopCpuAirRouteDirection(11,-1,true)==-1,
+      "airborne leftward crossing also keeps its takeoff direction");
+  check(MmxCoopCpuAirRouteDirection(-80,1,false)==-1,
+      "landing releases flight commitment and resumes positional follow");
+  check(MmxCoopCpuPitApproachTicks(116)>100,
+      "pit route persists through a long airborne wall approach");
+  check(MmxCoopCpuPitApproachTicks(76)>=MmxCoopCpuPitApproachTicks(116)-40,
+      "pit route does not expire immediately after a short dash");
+  check(MmxCoopCpuCrumbleJumpAllowed(true,48,104,true),
+      "breaking highway: jump early toward verified landing");
+  check(MmxCoopCpuCrumbleWallAllowed(true,48,false,true),
+      "broken road: opposite wall is an escape when verified");
+  check(!MmxCoopCpuCrumbleWallAllowed(true,48,true,true) &&
+        !MmxCoopCpuCrumbleWallAllowed(true,48,false,false),
+      "broken road: stable floor preferred, unverified wall rejected");
+  check(!MmxCoopCpuCrumbleWallAllowed(false,48,false,true),
+      "broken road: do not initiate a grounded jump in midair");
+  check(!MmxCoopCpuCrumbleJumpAllowed(true,48,0,true) &&
+        !MmxCoopCpuCrumbleJumpAllowed(true,96,128,true),
+      "breaking highway: do not invent a landing or jump too far ahead");
+  check(!MmxCoopCpuCrumbleJumpAllowed(false,48,104,true) &&
+        !MmxCoopCpuCrumbleJumpAllowed(true,48,104,false),
+      "breaking highway: no jump while airborne or under low ceiling");
+  check(MmxCoopCpuWallPushFrames(true,true)==5,
+      "wide-arc tall climb briefly steers away before returning");
+  check(MmxCoopCpuWallPushFrames(true,false)==0 &&
+        MmxCoopCpuWallPushFrames(false,true)==4,
+      "wall arc test leaves normal and ordinary wall slides unchanged");
+  check(!MmxCoopCpuWallApex(501,501,true) &&
+        MmxCoopCpuWallApex(502,501,true),
+      "wide-arc apex does not release B on fractional pixel plateau");
+  check(MmxCoopCpuWallApex(501,501,false),
+      "verified baseline apex remains unchanged when test is disabled");
   check(MmxCoopCpuChooseMove(true,true,false,false,false,false)==MMX_CPU_MOVE_JUMP,
       "ground probe: missing ground with a landing means jump");
   check(MmxCoopCpuChooseMove(true,false,false,false,false,true)==MMX_CPU_MOVE_WAIT,
@@ -1268,6 +1311,37 @@ static void coop_cpu_companion_checks(const char *fixture) {
   s.players[1].body[2]=0;
   MmxCoopSetState(&s);
 
+  /* Medium-elevation platform: keep pushing INTO the wall throughout
+   * the kick while retaining the ordinary two-kick recovery cap. */
+  MmxCoopSetCpuCompanion(false);
+  MmxCoopSetCpuCompanion(true);
+  s=MmxCoopGetState();
+  unsigned mid_x=coop_x(&s.players[1]),mid_y=coop_y(&s.players[1]);
+  unsigned mid_goal_y=mid_y>=72?mid_y-56:0;
+  unsigned mid_goal_x=mid_x+48;
+  s.players[0].body[5]=(uint8_t)mid_goal_x;
+  s.players[0].body[6]=(uint8_t)(mid_goal_x>>8);
+  s.players[0].body[8]=(uint8_t)mid_goal_y;
+  s.players[0].body[9]=(uint8_t)(mid_goal_y>>8);
+  s.players[0].body[0x2b]|=4;
+  s.players[1].body[0x2b]&=(uint8_t)~4;
+  s.players[1].body[2]=0x12;
+  s.players[1].input=0;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check((s.players[1].input&(SNES_PAD_RIGHT|SNES_PAD_B))==
+        (SNES_PAD_RIGHT|SNES_PAD_B),
+      "mid-height goal: begins wall kick with right held");
+  s.players[1].body[2]=6;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check((s.players[1].input&(SNES_PAD_RIGHT|SNES_PAD_B))==
+        (SNES_PAD_RIGHT|SNES_PAD_B) &&
+        !(s.players[1].input&SNES_PAD_LEFT),
+      "mid-height goal: forward held during kick ascent");
+  MmxCoopSetCpuCompanion(false);
+  MmxCoopSetCpuCompanion(true);
+
   /* High-elevation goal is different from an accidental wall slide.
    * A 272px Highway support column requires several native wall kicks
    * without landing. Simulate a safe grounded X far above the follower,
@@ -1337,10 +1411,8 @@ static void coop_cpu_companion_checks(const char *fixture) {
   MmxCoopSetCpuCompanion(false);
   MmxCoopSetCpuCompanion(true);
 
-  /* The human can run toward a companion who is already AHEAD: do not
-   * force the CPU to turn away from an approaching obstacle. A stationary
-   * companion with valid ground should also attempt its own jump after
-   * repeated left/right movement inputs fail to make progress. */
+  /* A human moving toward an already-ahead CPU must not pull the CPU
+   * farther away from the human. Ordinary stall jump should still work. */
   MmxCoopSetCpuCompanion(false);
   MmxCoopSetCpuCompanion(true);
   s=MmxCoopGetState();
@@ -1356,8 +1428,8 @@ static void coop_cpu_companion_checks(const char *fixture) {
   unsigned toward=route>0?SNES_PAD_RIGHT:SNES_PAD_LEFT;
   MmxCoopPoll((uint16_t)toward,0);
   s=MmxCoopGetState();
-  check(s.players[1].input&toward,
-      "CPU follows human travel intent when companion is already ahead");
+  check(!(s.players[1].input&toward),
+      "CPU does not follow a human input away from the human position");
   bool jumped=false;
   for(unsigned ticks=0;ticks<24;++ticks) {
     /* Intentionally hold the snapshot motion still to simulate a solid,
@@ -1418,33 +1490,100 @@ static void coop_cpu_companion_checks(const char *fixture) {
   check(s.players[0].input==SNES_PAD_LEFT,
       "controlled Zero fallen: DualSense immediately returns to living X");
 
-  /* X3 Zero's real buster charges by HOLDING Y. Do not waste it on
-   * taps every twelve ticks while X is being followed. Release only
-   * with a valid enemy in front and a charge-capable idle weapon. */
+  /* Full X3 charge only on a major enemy; small 21-frame native buster
+   * shots for ordinary targets; no useless stored charge on empty air. */
   s.players[1].status=MMX_COOP_ALIVE;
   s.players[1].body[0x27]|=1;
+  s.players[1].body[2]=0;
   s.players[1].zero.modern.enabled=0;
   s.players[1].zero.charge=0;
-  s.players[1].zero.burst=0;
-  s.players[1].zero.combo=0;
+  s.players[1].zero.burst=s.players[1].zero.combo=0;
   s.players[1].zero.slash=0;
   MmxCoopSetState(&s);
   g_ram[enemy]=0;
   MmxCoopPoll(0,0);s=MmxCoopGetState();
-  check((s.players[1].input&SNES_PAD_Y)!=0,
-      "X3 CPU Zero holds Y to charge his powerful native buster");
-  s.players[0].body[5]=(uint8_t)(coop_x(&s.players[1])+80);
-  s.players[0].body[6]=(uint8_t)((coop_x(&s.players[1])+80)>>8);
-  s.players[1].zero.charge=141;
-  MmxCoopSetState(&s);
-  unsigned foe_x=coop_x(&s.players[1])+48,foe_y=coop_y(&s.players[1]);
+  check(!(s.players[1].input&SNES_PAD_Y),
+      "CPU Zero does not charge when no target exists");
+  check(MmxCoopCpuZeroChargeGoal(false)==21 &&
+        MmxCoopCpuZeroChargeGoal(true)==201,
+      "quick ordinary buster and full 201-frame boss charge");
+  unsigned zx=coop_x(&s.players[1]),zy=coop_y(&s.players[1]);
+  s.players[0].body[5]=(uint8_t)(zx+80);
+  s.players[0].body[6]=(uint8_t)((zx+80)>>8);
   g_ram[enemy]=1;g_ram[enemy+14]=1;g_ram[enemy+0x27]=15;
+  g_ram[enemy+10]=0x7f; /* Explicit non-boss kind. */
+  unsigned foe_x=zx+48,foe_y=zy;
   g_ram[enemy+5]=(uint8_t)foe_x;g_ram[enemy+6]=(uint8_t)(foe_x>>8);
   g_ram[enemy+8]=(uint8_t)foe_y;g_ram[enemy+9]=(uint8_t)(foe_y>>8);
+  s.players[1].body[0x69]|=64; /* Facing target right. */
+  s.players[1].zero.charge=20;
+  s.players[1].input=SNES_PAD_Y;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check((s.players[1].input&SNES_PAD_Y)!=0,
+      "ordinary enemy: continue charging before small-shot threshold");
+  s.players[1].zero.charge=21;
+  s.players[1].input=SNES_PAD_Y;
+  MmxCoopSetState(&s);
   MmxCoopPoll(0,0);s=MmxCoopGetState();
   check(!(s.players[1].input&SNES_PAD_Y),
-      "X3 CPU Zero releases fully charged buster toward a real enemy");
-  g_ram[enemy]=0;
+      "ordinary enemy: release promptly for quick buster shot");
+  unsigned bx=zx-48,by=zy+72;
+  g_ram[enemy+10]=0x01; /* Known miniboss class. */
+  g_ram[enemy+5]=(uint8_t)bx;g_ram[enemy+6]=(uint8_t)(bx>>8);
+  g_ram[enemy+8]=(uint8_t)by;g_ram[enemy+9]=(uint8_t)(by>>8);
+  s.players[1].zero.charge=201;
+  s.players[1].input=SNES_PAD_Y;
+  s.players[1].body[0x69]|=64; /* Wrong facing: don't waste full charge. */
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check((s.players[1].input&SNES_PAD_Y)!=0,
+      "miniboss behind: keep full charge until actually facing it");
+  s.players[1].zero.charge=141;
+  s.players[1].input=SNES_PAD_Y;
+  s.players[1].body[0x69]&=(uint8_t)~64;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check((s.players[1].input&SNES_PAD_Y)!=0,
+      "miniboss: 141 charge must wait for full X3 tier");
+  s.players[1].zero.charge=201;
+  s.players[1].input=SNES_PAD_Y;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check(!(s.players[1].input&SNES_PAD_Y),
+      "miniboss: release full 201 charge while facing it");
+  /* Fully charged X3 combo uses NEW Y edges after each native burst.
+   * AI must release Y during the burst and retrigger only when ready. */
+  s.players[1].zero.charge=0;
+  s.players[1].zero.combo=1;
+  s.players[1].zero.burst=1;
+  s.players[1].zero.saber_ready=1;
+  s.players[1].input=SNES_PAD_Y;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check(!(s.players[1].input&SNES_PAD_Y),
+      "X3 boss burst: releases Y to arm next attack edge");
+  s.players[1].zero.burst=0;
+  s.players[1].input=0;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check((s.players[1].input&SNES_PAD_Y)!=0,
+      "X3 boss combo: issues a new Y press for second shot");
+  s.players[1].zero.combo=2;
+  s.players[1].zero.burst=0;
+  s.players[1].zero.shot_mask=0;
+  s.players[1].body[0x7d]=0; /* WRAM $C25: native saber beam occupancy. */
+  s.players[1].input=SNES_PAD_Y;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check(!(s.players[1].input&SNES_PAD_Y),
+      "X3 saber combo: releases Y before the final input edge");
+  s.players[1].input=0;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check((s.players[1].input&SNES_PAD_Y)!=0,
+      "X3 saber combo: fresh Y edge after beam slots clear");
+  g_ram[enemy]=0;g_ram[enemy+10]=0;
   MmxCoopSetSwitchTrigger(false);
   MmxCoopSetCpuCompanion(false);
   MmxCoopPoll(0,SNES_PAD_LEFT);s=MmxCoopGetState();

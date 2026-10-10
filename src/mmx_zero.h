@@ -71,6 +71,10 @@ unsigned MmxZeroMuzzle(const uint8_t ram[0x20000], unsigned object,
 unsigned MmxZeroWeaponOrigin(const uint8_t ram[0x20000], unsigned object,
                              unsigned axis, unsigned original);
 unsigned MmxZeroWeaponTick(uint8_t ram[0x20000], unsigned object, unsigned active);
+/* Optional combat balance: triple effective Zero-to-enemy damage, never
+ * Zero's incoming damage or X's output. Preserve 0/immune hits. */
+unsigned MmxZeroDamageBoost(unsigned damage,bool zero_active,
+                            unsigned enemy,unsigned projectile);
 unsigned MmxZeroDamage(uint8_t ram[0x20000], unsigned enemy, unsigned projectile, unsigned original);
 unsigned MmxZeroHitbox(const uint8_t ram[0x20000], unsigned enemy, unsigned projectile, unsigned original);
 MmxZeroState MmxZeroGetState(void);

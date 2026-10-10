@@ -64,6 +64,65 @@ static inline void MmxCoopImportLegacy(MmxCoopState *out, const uint8_t *bytes) 
       MMX_COOP_LEGACY_STATE_SIZE - old_player * 2);
 }
 
+/* Follow the controlled character's POSITION rather than their d-pad.
+ * Wall-kick steering and committed pit routes can temporarily override. */
+static inline int MmxCoopCpuFollowDirection(int target_dx) {
+  return target_dx>40 ? 1 : target_dx< -40 ? -1 : 0;
+}
+/* Once a terrain-verified crossing is launched, the midair flight follows
+ * its committed takeoff heading until actual landing or wall contact.
+ * The ordinary 40px proximity deadzone must not cancel a jump in flight. */
+static inline int MmxCoopCpuAirRouteDirection(
+    int target_dx, int committed_dir, bool airborne) {
+  if (airborne && committed_dir)
+    return committed_dir>0 ? 1 : -1;
+  return MmxCoopCpuFollowDirection(target_dx);
+}
+/* Bound the committed wall approach through the entire native dash,
+ * jump, descent and possible long wall approach. Wall contact or landing
+ * still terminates the route immediately. Keep within uint8_t range. */
+static inline uint8_t MmxCoopCpuPitApproachTicks(int distance) {
+  return distance>=96 ? 220 : 180;
+}
+/* Zero's X3 small buster requires 21 charge ticks. Reserve the full
+ * 201-tick saber-ready charge for bosses and minibosses. */
+static inline unsigned MmxCoopCpuZeroChargeGoal(bool boss) {
+  return boss ? 201u : 21u;
+}
+/* Short, falling highway road sections warrant an EARLY jump, but only
+ * toward solid support beyond the first missing span. The native jump
+ * still controls the actual crossing; a wide gap is never presumed safe. */
+static inline bool MmxCoopCpuCrumbleJumpAllowed(
+    bool grounded,int first_gap,int landing_distance,bool headroom) {
+  return grounded && headroom && first_gap>=20 && first_gap<=72 &&
+         landing_distance>=first_gap+24 && landing_distance<=176;
+}
+/* A vanishing platform with no verified stable landing may use a real
+ * opposite wall. Do not invent a catch when the scanner sees none. */
+static inline bool MmxCoopCpuCrumbleWallAllowed(
+    bool grounded,int first_gap,bool stable_landing,bool verified_wall) {
+  return grounded && first_gap>=20 && first_gap<=72 &&
+         !stable_landing && verified_wall;
+}
+/* A route toward a verified higher platform needs the full native
+ * wall-kick budget, even when the leader is only 32-95px above.
+ * Accidental wall slides without an upper destination still use 2 kicks. */
+static inline bool MmxCoopCpuFullWallClimb(bool pit_wall_arrival,
+                                            bool verified_upper_goal) {
+  return pit_wall_arrival || verified_upper_goal;
+}
+/* A long climb may need a brief OUTWARD kick, just like a player.
+ * Keep ordinary slides and the verified wall climb as the default. */
+static inline uint8_t MmxCoopCpuWallPushFrames(bool tall, bool arc_mode) {
+  return tall ? (arc_mode ? 5u : 0u) : 4u;
+}
+static inline bool MmxCoopCpuWallApex(int current_y,int previous_y,
+                                      bool arc_mode) {
+  /* Integer pixel coordinates can briefly repeat DURING ascent.
+   * Wide-arc mode waits for genuine downward motion. */
+  return arc_mode ? current_y>previous_y : current_y>=previous_y;
+}
+
 /* Pure controller decision for one local companion terrain scan.
  * Sensor inputs belong to the CPU's OWN position, never the human jump pad.
  * WAIT forbids walking into unverified void; CLIMB requests takeoff against
