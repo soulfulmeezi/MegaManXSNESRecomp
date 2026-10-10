@@ -1073,6 +1073,13 @@ static void coop_cpu_sensing_checks(void) {
       "pit route does not expire immediately after a short dash");
   check(MmxCoopCpuCrumbleJumpAllowed(true,48,104,true),
       "breaking highway: jump early toward verified landing");
+  check(MmxCoopCpuCrumbleWallAllowed(true,48,false,true),
+      "broken road: opposite wall is an escape when verified");
+  check(!MmxCoopCpuCrumbleWallAllowed(true,48,true,true) &&
+        !MmxCoopCpuCrumbleWallAllowed(true,48,false,false),
+      "broken road: stable floor preferred, unverified wall rejected");
+  check(!MmxCoopCpuCrumbleWallAllowed(false,48,false,true),
+      "broken road: do not initiate a grounded jump in midair");
   check(!MmxCoopCpuCrumbleJumpAllowed(true,48,0,true) &&
         !MmxCoopCpuCrumbleJumpAllowed(true,96,128,true),
       "breaking highway: do not invent a landing or jump too far ahead");
