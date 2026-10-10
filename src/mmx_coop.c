@@ -1870,8 +1870,10 @@ void MmxCoopPoll(uint16_t p1, uint16_t p2) {
     state.players[i].input = inputs[i];
   }
 
+  /* MMX_CPU_TRACE collects synchronized human and CPU body snapshots.
+   * MMX_HUMAN_TRACE remains supported for focused movement logging. */
   if (offline_cpu && state.initialized &&
-      getenv("MMX_HUMAN_TRACE")) {
+      (getenv("MMX_CPU_TRACE") || getenv("MMX_HUMAN_TRACE"))) {
     static int previous_action=-1,previous_seat=-1;
     const MmxCoopPlayer *h=&state.players[cpu_human_seat];
     const MmxCoopPlayer *c=&state.players[cpu_human_seat^1];
@@ -1896,6 +1898,43 @@ void MmxCoopPoll(uint16_t p1, uint16_t p2) {
           action,(h->body[0x2b]&4)!=0,
           (unsigned)h->input,(unsigned)h->pressed);
     }
+    /* Stable X + Zero tracing survives L2 role switches. Record native
+     * position, actions, ground, velocity, inputs and HP together. */
+    const unsigned xseat=state.players[0].character==MMX_COOP_X ? 0u : 1u;
+    const MmxCoopPlayer *xp=&state.players[xseat];
+    const MmxCoopPlayer *zp=&state.players[xseat^1];
+    static int previous_x_action=-1,previous_zero_action=-1;
+    bool action_change=previous_x_action!=(int)xp->body[2] ||
+                       previous_zero_action!=(int)zp->body[2];
+    bool edge_any=((xp->pressed|zp->pressed)&
+                   (MMX_CPU_JUMP|MMX_CPU_DASH))!=0;
+    if (snes_frame_counter%3==0 || action_change || edge_any ||
+        cpu_human_seat!=previous_seat) {
+      fprintf(stderr,
+          "[duo-move] frame=%d human=%s "
+          "X_role=%s X_x=%u X_y=%u X_action=%u X_ground=%d "
+          "X_vx=%d X_vy=%d X_pad=%03x X_pressed=%03x X_hp=%u X_status=%u "
+          "Zero_role=%s Zero_x=%u Zero_y=%u Zero_action=%u Zero_ground=%d "
+          "Zero_vx=%d Zero_vy=%d Zero_pad=%03x Zero_pressed=%03x "
+          "Zero_hp=%u Zero_status=%u dx=%d\n",
+          snes_frame_counter,
+          h->character==MMX_COOP_ZERO?"Zero":"X",
+          xseat==cpu_human_seat?"human":"CPU",
+          word(xp->body+5),word(xp->body+8),
+          (unsigned)xp->body[2],(int)((xp->body[0x2b]&4)!=0),
+          (int16_t)word(xp->body+0x1a),(int16_t)word(xp->body+0x1c),
+          (unsigned)xp->input,(unsigned)xp->pressed,
+          (unsigned)(xp->body[0x27]&127),(unsigned)xp->status,
+          (xseat^1)==cpu_human_seat?"human":"CPU",
+          word(zp->body+5),word(zp->body+8),
+          (unsigned)zp->body[2],(int)((zp->body[0x2b]&4)!=0),
+          (int16_t)word(zp->body+0x1a),(int16_t)word(zp->body+0x1c),
+          (unsigned)zp->input,(unsigned)zp->pressed,
+          (unsigned)(zp->body[0x27]&127),(unsigned)zp->status,
+          (int)word(xp->body+5)-(int)word(zp->body+5));
+    }
+    previous_x_action=xp->body[2];
+    previous_zero_action=zp->body[2];
     /* Compare the controlled character with the CPU on the SAME
      * frame. Repeated positions with cpu_dir=R show native movement
      * has stalled despite a held-right controller command. */
