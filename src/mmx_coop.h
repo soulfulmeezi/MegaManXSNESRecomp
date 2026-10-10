@@ -64,6 +64,12 @@ static inline void MmxCoopImportLegacy(MmxCoopState *out, const uint8_t *bytes) 
       MMX_COOP_LEGACY_STATE_SIZE - old_player * 2);
 }
 
+/* Follow the controlled character's POSITION rather than their d-pad.
+ * Wall-kick steering and committed pit routes can temporarily override. */
+static inline int MmxCoopCpuFollowDirection(int target_dx) {
+  return target_dx>40 ? 1 : target_dx< -40 ? -1 : 0;
+}
+
 /* Pure controller decision for one local companion terrain scan.
  * Sensor inputs belong to the CPU's OWN position, never the human jump pad.
  * WAIT forbids walking into unverified void; CLIMB requests takeoff against
