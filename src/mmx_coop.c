@@ -1757,6 +1757,21 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
       ram[0x1f7a]==0;
   if (crumble_enabled) for(int d=-16;d<=128;d+=16)
     cpu_companion_watch_road_cell(ram,x+direction*d,feet+2);
+  if (crumble_enabled && grounded && getenv("MMX_CPU_TRACE") &&
+      snes_frame_counter%90==0) {
+    fprintf(stderr,
+        "[cpu-crumble-scan] frame=%d x=%d feet=%d dir=%d "
+        "tile_here=%u ahead24=%u ahead48=%u ahead72=%u "
+        "support24=%d support48=%d support72=%d\n",
+        snes_frame_counter,x,feet,direction,
+        MmxWeaponsTerrainClass(ram,x,feet+2),
+        MmxWeaponsTerrainClass(ram,x+direction*24,feet+2),
+        MmxWeaponsTerrainClass(ram,x+direction*48,feet+2),
+        MmxWeaponsTerrainClass(ram,x+direction*72,feet+2),
+        (int)cpu_companion_supported(ram,x+direction*24,feet),
+        (int)cpu_companion_supported(ram,x+direction*48,feet),
+        (int)cpu_companion_supported(ram,x+direction*72,feet));
+  }
   int crumble_gap=0,crumble_landing=0;
   bool crumble_route=crumble_enabled && !cpu_air_route_ticks &&
       cpu_companion_crumble_route(
