@@ -69,6 +69,12 @@ static inline void MmxCoopImportLegacy(MmxCoopState *out, const uint8_t *bytes) 
 static inline int MmxCoopCpuFollowDirection(int target_dx) {
   return target_dx>40 ? 1 : target_dx< -40 ? -1 : 0;
 }
+/* Bound the committed wall approach through the entire native dash,
+ * jump, descent and possible long wall approach. Wall contact or landing
+ * still terminates the route immediately. Keep within uint8_t range. */
+static inline uint8_t MmxCoopCpuPitApproachTicks(int distance) {
+  return distance>=96 ? 220 : 180;
+}
 
 /* Pure controller decision for one local companion terrain scan.
  * Sensor inputs belong to the CPU's OWN position, never the human jump pad.
