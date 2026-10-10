@@ -65,6 +65,11 @@ static uint8_t cpu_stall_ticks;
 static uint8_t cpu_zero_melee_cooldown;
 static bool cpu_zero_dash_was_active;
 static bool cpu_wall_escape_reported;
+/* Host-only route commitment for an intentional drop to an opposite wall.
+ * This never changes native physics, guest memory or save-state layout. */
+static uint8_t cpu_pit_wall_ticks;
+static int8_t cpu_pit_wall_direction;
+static bool cpu_pit_wall_was_airborne;
 static uint16_t cpu_last_x;
 static int8_t cpu_jump_direction, cpu_wall_direction, cpu_stall_direction;
 static unsigned starting_character;
@@ -378,6 +383,8 @@ static void cpu_companion_reset_motion(void) {
   cpu_stall_ticks=0;cpu_last_x=0;cpu_stall_direction=0;
   cpu_zero_melee_cooldown=0;cpu_zero_dash_was_active=false;
   cpu_wall_escape_reported=false;
+  cpu_pit_wall_ticks=0;cpu_pit_wall_direction=0;
+  cpu_pit_wall_was_airborne=false;
 }
 void MmxCoopReset(void) {
   cpu_companion_reset_motion();cpu_human_seat=cpu_swap_trigger_down=cpu_rescue_cooldown=0;
@@ -783,6 +790,47 @@ static bool cpu_companion_lower_landing(const uint8_t *ram,
         continue;
       if (distance_out) *distance_out=d;
       if (drop_out) *drop_out=surface-feet;
+      return true;
+    }
+  }
+  return false;
+}
+
+/* Deliberate pit traverse: locate a physical wall BELOW the far lip.
+ * Demand open terrain through the gap and an exposed, continuous wall
+ * face within normal falling approach range. The leader must separately
+ * be standing beyond this wall. This is not a guaranteed safe trajectory. */
+static bool cpu_companion_opposite_pit_wall(
+    const uint8_t *ram,int x,int feet,int dir,
+    int *distance_out,int *depth_out) {
+  if (!ram || !dir) return false;
+  int visible_bottom=(int)word(ram+0x1e5c)+224;
+  for (int distance=40;distance<=88;distance+=8) {
+    int wx=x+dir*distance;
+    /* There must be a void before the target. Solid walkways are handled
+     * by the existing regular movement and landing planners. */
+    if (cpu_companion_supported(ram,x+dir*(distance/2),feet) ||
+        cpu_companion_supported(ram,wx-dir*12,feet))
+      continue;
+    for (int depth=24;depth<=80;depth+=8) {
+      int wy=feet+depth;
+      /* Never approve a catch already below the camera's death area. */
+      if (wy+40>visible_bottom+16) continue;
+      if (!MmxWeaponsTerrainSolid(ram,wx,wy,false,NULL) ||
+          !MmxWeaponsTerrainSolid(ram,wx,wy+24,false,NULL) ||
+          !MmxWeaponsTerrainSolid(ram,wx,wy+40,false,NULL) ||
+          MmxWeaponsTerrainSolid(ram,wx-dir*12,wy,false,NULL) ||
+          MmxWeaponsTerrainSolid(ram,wx-dir*12,wy+24,false,NULL))
+        continue;
+      bool clear=true;
+      for (int step=12;step<distance-12;step+=12)
+        if (MmxWeaponsTerrainSolid(
+                ram,x+dir*step,feet-12,false,NULL)) {
+          clear=false;break;
+        }
+      if (!clear) continue;
+      if (distance_out) *distance_out=distance;
+      if (depth_out) *depth_out=depth;
       return true;
     }
   }
@@ -1244,6 +1292,22 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
     }
   }
   bool grounded=(follower->body[0x2b]&4)!=0;
+  /* Keep targeting the opposite wall through descent, even if the
+   * usual horizontal follow deadzone is crossed in midair. */
+  if (cpu_pit_wall_ticks) {
+    if (!grounded) cpu_pit_wall_was_airborne=true;
+    if (grounded && cpu_pit_wall_was_airborne) {
+      if (getenv("MMX_CPU_TRACE"))
+        fprintf(stderr,"[cpu-pit] landed before wall contact x=%d y=%d\n",x,y);
+      cpu_pit_wall_ticks=0;cpu_pit_wall_was_airborne=false;
+      cpu_pit_wall_direction=0;
+    } else {
+      direction=cpu_pit_wall_direction;
+      --cpu_pit_wall_ticks;
+      if (!cpu_pit_wall_ticks && getenv("MMX_CPU_TRACE"))
+        fprintf(stderr,"[cpu-pit] approach expired x=%d y=%d\n",x,y);
+    }
+  }
   bool wall_slide=!grounded && follower->body[2]==0x12;
   /* Use actual Y-position change across game frames for descent, rather
    * than mistaking an upward wall-kick action $12 for a downward slide. */
@@ -1311,8 +1375,18 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
       /* X is a route GOAL only when settled on higher solid ground.
        * Use the longer climb budget while that goal is at least 96px up;
        * do not extend recovery merely because the human jumps in place. */
-      cpu_tall_wall_climb=(leader->body[0x2b]&4)!=0 &&
-          ((int)word(leader->body+8) <= y-96);
+      bool pit_wall_arrival=cpu_pit_wall_ticks &&
+          cpu_pit_wall_was_airborne &&
+          cpu_wall_direction==cpu_pit_wall_direction;
+      cpu_tall_wall_climb=pit_wall_arrival ||
+          ((leader->body[0x2b]&4)!=0 &&
+           ((int)word(leader->body+8) <= y-96));
+      if (pit_wall_arrival && getenv("MMX_CPU_TRACE"))
+        fprintf(stderr,
+            "[cpu-pit] opposite wall reached x=%d y=%d dir=%d\n",
+            x,y,(int)cpu_wall_direction);
+      cpu_pit_wall_ticks=0;cpu_pit_wall_direction=0;
+      cpu_pit_wall_was_airborne=false;
       cpu_tall_wall_start_y=cpu_tall_wall_best_y=(uint16_t)y;
       cpu_tall_wall_trace_ticks=0;
       cpu_tall_wall_kick_x=(uint16_t)x;
@@ -1435,6 +1509,10 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
       last_idle_trace=snes_frame_counter;
     }
   }
+  /* A planned drop must continue walking off the lip before the native
+   * airborne movement and ordinary wall-recovery logic take over. */
+  if (cpu_pit_wall_ticks && grounded && !cpu_pit_wall_was_airborne)
+    return input&(uint16_t)~(MMX_CPU_JUMP|MMX_CPU_DASH);
   if (!grounded || !direction) return input;
   int feet=y+16;
   bool edge=cpu_companion_ground_missing(ram,x,feet,direction);
@@ -1502,6 +1580,30 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
               (int)grounded,(unsigned)cpu_jump_cooldown_frames);
       last_log=snes_frame_counter;
     }
+  }
+  /* Optional first-pass pit route, separate from the normal floor/jump
+   * planner. All other unverified pits retain their WAIT behavior. */
+  int pit_wall_distance=0,pit_wall_depth=0;
+  bool pit_wall_route=getenv("MMX_CPU_PIT_WALL") &&
+      edge && !short_landing && !safe_drop &&
+      !raised_wall && !goal_wall &&
+      (leader->body[0x2b]&4)!=0 && dx*direction>64 &&
+      cpu_companion_opposite_pit_wall(
+          ram,x,feet,direction,&pit_wall_distance,&pit_wall_depth) &&
+      dx*direction>pit_wall_distance+24;
+  if (pit_wall_route) {
+    cpu_pit_wall_ticks=64;
+    cpu_pit_wall_direction=(int8_t)direction;
+    cpu_pit_wall_was_airborne=false;
+    cpu_jump_hold_frames=cpu_cliff_dash_frames=0;
+    cpu_jump_seen_airborne=false;
+    if (getenv("MMX_CPU_TRACE"))
+      fprintf(stderr,
+          "[cpu-pit] controlled drop x=%d feet=%d dir=%d wall_dist=%d wall_depth=%d leader_dx=%d\n",
+          x,feet,direction,pit_wall_distance,pit_wall_depth,dx);
+    /* Don't jump over the low wall; descend into the face, then let
+     * native wall-slide and the already-verified wall kicks take over. */
+    return input&(uint16_t)~(MMX_CPU_JUMP|MMX_CPU_DASH);
   }
   /* Terrain sensing takes priority over ordinary follow: a missing floor
    * triggers a deliberate jump toward an identified landing/wall, never
