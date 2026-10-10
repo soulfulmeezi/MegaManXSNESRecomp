@@ -1123,6 +1123,8 @@ static uint16_t cpu_companion_wall_recovery(const MmxCoopPlayer *f,
   uint16_t toward=cpu_wall_direction>0 ? MMX_CPU_RIGHT : MMX_CPU_LEFT;
   uint16_t away=cpu_wall_direction>0 ? MMX_CPU_LEFT : MMX_CPU_RIGHT;
   unsigned max_kicks=cpu_tall_wall_climb ? 8u : 2u;
+  bool arc_mode=cpu_tall_wall_climb &&
+      getenv("MMX_CPU_WALL_ARC")!=NULL;
   if (!wall_slide && cpu_wall_recovery_jumps)
     cpu_wall_recovery_left_slide=true;
   /* A fast wall climb must keep B through the upward motion, then have
@@ -1153,8 +1155,10 @@ static uint16_t cpu_companion_wall_recovery(const MmxCoopPlayer *f,
         cpu_tall_wall_kick_y=(uint16_t)word(f->body+8);
         cpu_tall_wall_trace_ticks=0;
       }
-      cpu_wall_recovery_ticks=cpu_tall_wall_climb ? 0 : 4;
-      cpu_wall_jump_hold_frames=cpu_tall_wall_climb ? 24 : 17;
+      cpu_wall_recovery_ticks=MmxCoopCpuWallPushFrames(
+          cpu_tall_wall_climb,arc_mode);
+      cpu_wall_jump_hold_frames=arc_mode ? 34 :
+          cpu_tall_wall_climb ? 24 : 17;
       if (getenv("MMX_CPU_TRACE"))
         fprintf(stderr,"[cpu-wall] buffered kick confirmed %u/%u action=16 frame=%d\n",
                 (unsigned)cpu_wall_recovery_jumps,max_kicks,snes_frame_counter);
@@ -1198,12 +1202,19 @@ static uint16_t cpu_companion_wall_recovery(const MmxCoopPlayer *f,
     /* A long climb needs to get back to its wall quickly. One kick-off
      * frame creates a clean release, then hold INTO the same wall while
      * still rising; otherwise Zero drifts away and lands back at the base. */
-    cpu_wall_recovery_ticks=cpu_tall_wall_climb ? 0 : 4;
-    /* Hold B for the whole native upward arc on a tall climb, up to
-     * 24 frames as a safety ceiling. Release at the measured apex,
-     * not at a guessed six-frame delay; the next slide must see a
-     * FRESH press edge to allow another immediate native wall-jump. */
-    cpu_wall_jump_hold_frames=cpu_tall_wall_climb ? 24 : 18;
+    cpu_wall_recovery_ticks=MmxCoopCpuWallPushFrames(
+        cpu_tall_wall_climb,arc_mode);
+    /* Optional wide-arc test: keep B available longer but release it
+     * at measured genuine descent to prepare the next native edge. */
+    cpu_wall_jump_hold_frames=arc_mode ? 34 :
+        cpu_tall_wall_climb ? 24 : 18;
+    if (arc_mode && getenv("MMX_CPU_TRACE"))
+      fprintf(stderr,
+          "[cpu-wall-arc] kick=%u/%u x=%u y=%u push_out=%u jump_hold=%u\n",
+          (unsigned)cpu_wall_recovery_jumps,max_kicks,
+          (unsigned)word(f->body+5),(unsigned)word(f->body+8),
+          (unsigned)cpu_wall_recovery_ticks,
+          (unsigned)cpu_wall_jump_hold_frames);
     if (getenv("MMX_CPU_TRACE"))
       fprintf(stderr,"[cpu-wall] jump=%u/%u frame=%d dir=%d tall=%d best_y=%u start_y=%u\n",
               (unsigned)cpu_wall_recovery_jumps,max_kicks,
@@ -1240,7 +1251,7 @@ static uint16_t cpu_companion_wall_recovery(const MmxCoopPlayer *f,
   if (cpu_wall_recovery_phase==MMX_CPU_WALL_PUSH) {
     /* Native wall-kick already provides a strong push-off.
      * Pressing AWAY again prevented high-wall reattachment. */
-    steer=cpu_wall_goal_climb ? toward : away;
+    steer=arc_mode ? away : cpu_wall_goal_climb ? toward : away;
     if (cpu_wall_recovery_ticks) --cpu_wall_recovery_ticks;
     if (!cpu_wall_recovery_ticks) {
       cpu_wall_recovery_phase=MMX_CPU_WALL_RETURN;
@@ -1357,13 +1368,14 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
    * than mistaking an upward wall-kick action $12 for a downward slide. */
   bool descending=!grounded && cpu_wall_y_valid &&
                   y>(int)cpu_wall_last_y;
-  /* Measured apex: Zero has already climbed >=6 pixels since kick
-   * takeoff and his Y has stopped decreasing. A Y equality is enough;
-   * it is the last opportunity to release B before descent and slide. */
+  /* Normal mode keeps the verified ascent policy. Wide-arc test mode
+   * does not mistake a one-frame integer-pixel Y plateau for the apex:
+   * release B only once Y actually starts increasing (falling). */
   bool kick_apex=!grounded && cpu_tall_wall_climb &&
       cpu_wall_recovery_jumps>0 && cpu_wall_y_valid &&
       (int)cpu_tall_wall_kick_y-y>=6 &&
-      y>=(int)cpu_wall_last_y;
+      MmxCoopCpuWallApex(y,(int)cpu_wall_last_y,
+                        getenv("MMX_CPU_WALL_ARC")!=NULL);
   if (grounded) cpu_wall_y_valid=false;
   else cpu_wall_y_valid=true;
   cpu_wall_last_y=(uint16_t)y;
