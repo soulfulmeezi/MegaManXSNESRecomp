@@ -97,6 +97,13 @@ static inline bool MmxCoopCpuCrumbleJumpAllowed(
   return grounded && headroom && first_gap>=20 && first_gap<=72 &&
          landing_distance>=first_gap+24 && landing_distance<=176;
 }
+/* A vanishing platform with no verified stable landing may use a real
+ * opposite wall. Do not invent a catch when the scanner sees none. */
+static inline bool MmxCoopCpuCrumbleWallAllowed(
+    bool grounded,int first_gap,bool stable_landing,bool verified_wall) {
+  return grounded && first_gap>=20 && first_gap<=72 &&
+         !stable_landing && verified_wall;
+}
 /* A long climb may need a brief OUTWARD kick, just like a player.
  * Keep ordinary slides and the verified wall climb as the default. */
 static inline uint8_t MmxCoopCpuWallPushFrames(bool tall, bool arc_mode) {
