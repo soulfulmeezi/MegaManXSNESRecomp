@@ -89,6 +89,14 @@ static inline uint8_t MmxCoopCpuPitApproachTicks(int distance) {
 static inline unsigned MmxCoopCpuZeroChargeGoal(bool boss) {
   return boss ? 201u : 21u;
 }
+/* Short, falling highway road sections warrant an EARLY jump, but only
+ * toward solid support beyond the first missing span. The native jump
+ * still controls the actual crossing; a wide gap is never presumed safe. */
+static inline bool MmxCoopCpuCrumbleJumpAllowed(
+    bool grounded,int first_gap,int landing_distance,bool headroom) {
+  return grounded && headroom && first_gap>=20 && first_gap<=72 &&
+         landing_distance>=first_gap+24 && landing_distance<=176;
+}
 /* A long climb may need a brief OUTWARD kick, just like a player.
  * Keep ordinary slides and the verified wall climb as the default. */
 static inline uint8_t MmxCoopCpuWallPushFrames(bool tall, bool arc_mode) {
