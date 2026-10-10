@@ -84,6 +84,11 @@ static inline int MmxCoopCpuAirRouteDirection(
 static inline uint8_t MmxCoopCpuPitApproachTicks(int distance) {
   return distance>=96 ? 220 : 180;
 }
+/* Zero's X3 small buster requires 21 charge ticks. Reserve the full
+ * 201-tick saber-ready charge for bosses and minibosses. */
+static inline unsigned MmxCoopCpuZeroChargeGoal(bool boss) {
+  return boss ? 201u : 21u;
+}
 /* A long climb may need a brief OUTWARD kick, just like a player.
  * Keep ordinary slides and the verified wall climb as the default. */
 static inline uint8_t MmxCoopCpuWallPushFrames(bool tall, bool arc_mode) {
