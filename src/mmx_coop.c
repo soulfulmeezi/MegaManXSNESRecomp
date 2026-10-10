@@ -1623,19 +1623,33 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
       cpu_wall_jump_hold_frames=0;
       cpu_jump_hold_frames=cpu_cliff_dash_frames=0;
       cpu_jump_seen_airborne=false;
-      /* X is a route GOAL only when settled on higher solid ground.
-       * Use the longer climb budget while that goal is at least 96px up;
-       * do not extend recovery merely because the human jumps in place. */
+      /* The old 96px threshold misclassified the 38px-high crumble
+       * platform as an incidental 2-kick slide. Full native climbing
+       * is needed for a verified upper destination at ANY elevation. */
       bool pit_wall_arrival=cpu_pit_wall_ticks &&
           cpu_pit_wall_was_airborne &&
           cpu_wall_direction==cpu_pit_wall_direction;
       bool elevated_wall_goal=(leader->body[0x2b]&4)!=0 &&
           (int)word(leader->body+8)<=y-32 &&
           abs(dx)<=176 && cpu_wall_direction*dx>=0;
-      cpu_wall_goal_climb=pit_wall_arrival || elevated_wall_goal;
-      cpu_tall_wall_climb=pit_wall_arrival ||
-          ((leader->body[0x2b]&4)!=0 &&
-           ((int)word(leader->body+8) <= y-96));
+      /* A grounded flag can briefly outlive a collapsing floor.
+       * In crumble mode, demand live solid support under X before
+       * promoting his platform as a full climbing destination. */
+      bool verified_upper_goal=elevated_wall_goal &&
+          (!crumble_enabled ||
+           cpu_companion_supported(ram,
+               (int)word(leader->body+5),
+               (int)word(leader->body+8)+16));
+      cpu_wall_goal_climb=pit_wall_arrival || verified_upper_goal;
+      cpu_tall_wall_climb=MmxCoopCpuFullWallClimb(
+          pit_wall_arrival,verified_upper_goal);
+      if (crumble_enabled && elevated_wall_goal &&
+          getenv("MMX_CPU_TRACE"))
+        fprintf(stderr,
+            "[cpu-crumble-climb] x=%d y=%d leader_above=%d "
+            "route=%d upper_floor=%d full_climb=%d\n",
+            x,y,y-(int)word(leader->body+8),(int)pit_wall_arrival,
+            (int)verified_upper_goal,(int)cpu_tall_wall_climb);
       if (pit_wall_arrival && getenv("MMX_CPU_TRACE"))
         fprintf(stderr,
             "[cpu-pit] opposite wall reached x=%d y=%d dir=%d\n",
