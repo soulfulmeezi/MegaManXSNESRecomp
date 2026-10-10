@@ -1071,6 +1071,16 @@ static void coop_cpu_sensing_checks(void) {
       "pit route persists through a long airborne wall approach");
   check(MmxCoopCpuPitApproachTicks(76)>=MmxCoopCpuPitApproachTicks(116)-40,
       "pit route does not expire immediately after a short dash");
+  check(MmxCoopCpuWallPushFrames(true,true)==5,
+      "wide-arc tall climb briefly steers away before returning");
+  check(MmxCoopCpuWallPushFrames(true,false)==0 &&
+        MmxCoopCpuWallPushFrames(false,true)==4,
+      "wall arc test leaves normal and ordinary wall slides unchanged");
+  check(!MmxCoopCpuWallApex(501,501,true) &&
+        MmxCoopCpuWallApex(502,501,true),
+      "wide-arc apex does not release B on fractional pixel plateau");
+  check(MmxCoopCpuWallApex(501,501,false),
+      "verified baseline apex remains unchanged when test is disabled");
   check(MmxCoopCpuChooseMove(true,true,false,false,false,false)==MMX_CPU_MOVE_JUMP,
       "ground probe: missing ground with a landing means jump");
   check(MmxCoopCpuChooseMove(true,false,false,false,false,true)==MMX_CPU_MOVE_WAIT,
