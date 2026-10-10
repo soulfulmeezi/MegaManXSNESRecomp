@@ -700,6 +700,9 @@ static bool cpu_companion_supported(const uint8_t *ram, int x, int feet) {
     if (MmxWeaponsTerrainSolid(ram,x,feet+depth,true,NULL)) return true;
   return false;
 }
+/* The existing terrain landing helper is defined below the dynamic road
+ * observer. The forward declaration keeps both probes in one module. */
+static bool cpu_companion_landing(const uint8_t *ram,int x,int feet);
 /* Compare the SAME world cell across frames. This captures highway road
  * actually disappearing from the collision map. A class change indicates
  * a mutable cell; it does not necessarily prove a future collapse. */
