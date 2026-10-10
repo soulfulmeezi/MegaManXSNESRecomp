@@ -1037,6 +1037,9 @@ static uint16_t cpu_companion_zero_combat(const uint8_t *r,
       !cpu_pit_wall_ticks && !cpu_air_route_ticks &&
       cpu_companion_supported(r,x,y+16) &&
       cpu_companion_supported(r,x+target.direction*12,y+16) &&
+      /* Combat steering must not override the ordinary pit WAIT rule.
+       * Use the same 28px lookahead as the terrain edge sensor. */
+      cpu_companion_supported(r,x+target.direction*28,y+16) &&
       !cpu_companion_obstacle_ahead(r,x,y,target.direction);
   if (safe_turn) {
     input&=(uint16_t)~(MMX_CPU_LEFT|MMX_CPU_RIGHT);
