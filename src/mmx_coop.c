@@ -1239,6 +1239,17 @@ static uint16_t cpu_companion_wall_recovery(const MmxCoopPlayer *f,
     if (!cpu_wall_recovery_ticks) cpu_wall_recovery_phase=MMX_CPU_WALL_SEEK;
   } else cpu_wall_recovery_phase=MMX_CPU_WALL_SEEK;
   if (cpu_wall_jump_hold_frames) {
+    /* Check whether the fixed B-hold expires before the native upward
+     * arc reaches its apex. Only that case justifies a longer hold. */
+    if (cpu_wall_jump_hold_frames==1 && !wall_slide &&
+        getenv("MMX_CPU_TRACE"))
+      fprintf(stderr,
+          "[cpu-wall-hold] timed out kick=%u tall=%d apex=%d "
+          "y=%u takeoff_y=%u vy=%d action=%u\n",
+          (unsigned)cpu_wall_recovery_jumps,(int)cpu_tall_wall_climb,
+          (int)at_kick_apex,(unsigned)word(f->body+8),
+          (unsigned)cpu_tall_wall_kick_y,
+          (int16_t)word(f->body+0x1c),(unsigned)f->body[2]);
     --cpu_wall_jump_hold_frames;
     steer|=MMX_CPU_JUMP;
   }
