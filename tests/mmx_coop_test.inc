@@ -1286,6 +1286,37 @@ static void coop_cpu_companion_checks(const char *fixture) {
   s.players[1].body[2]=0;
   MmxCoopSetState(&s);
 
+  /* Medium-elevation platform: keep pushing INTO the wall throughout
+   * the kick while retaining the ordinary two-kick recovery cap. */
+  MmxCoopSetCpuCompanion(false);
+  MmxCoopSetCpuCompanion(true);
+  s=MmxCoopGetState();
+  unsigned mid_x=coop_x(&s.players[1]),mid_y=coop_y(&s.players[1]);
+  unsigned mid_goal_y=mid_y>=72?mid_y-56:0;
+  unsigned mid_goal_x=mid_x+48;
+  s.players[0].body[5]=(uint8_t)mid_goal_x;
+  s.players[0].body[6]=(uint8_t)(mid_goal_x>>8);
+  s.players[0].body[8]=(uint8_t)mid_goal_y;
+  s.players[0].body[9]=(uint8_t)(mid_goal_y>>8);
+  s.players[0].body[0x2b]|=4;
+  s.players[1].body[0x2b]&=(uint8_t)~4;
+  s.players[1].body[2]=0x12;
+  s.players[1].input=0;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check((s.players[1].input&(SNES_PAD_RIGHT|SNES_PAD_B))==
+        (SNES_PAD_RIGHT|SNES_PAD_B),
+      "mid-height goal: begins wall kick with right held");
+  s.players[1].body[2]=6;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check((s.players[1].input&(SNES_PAD_RIGHT|SNES_PAD_B))==
+        (SNES_PAD_RIGHT|SNES_PAD_B) &&
+        !(s.players[1].input&SNES_PAD_LEFT),
+      "mid-height goal: forward held during kick ascent");
+  MmxCoopSetCpuCompanion(false);
+  MmxCoopSetCpuCompanion(true);
+
   /* High-elevation goal is different from an accidental wall slide.
    * A 272px Highway support column requires several native wall kicks
    * without landing. Simulate a safe grounded X far above the follower,
