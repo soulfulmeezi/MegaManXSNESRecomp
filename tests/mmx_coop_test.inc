@@ -1059,6 +1059,10 @@ static void coop_cpu_sensing_checks(void) {
       "follow X standing left even when X moves right");
   check(MmxCoopCpuFollowDirection(30)==0,
       "follow deadzone avoids jitter at short distance");
+  check(MmxCoopCpuPitApproachTicks(116)>100,
+      "pit route persists through a long airborne wall approach");
+  check(MmxCoopCpuPitApproachTicks(76)>=MmxCoopCpuPitApproachTicks(116)-40,
+      "pit route does not expire immediately after a short dash");
   check(MmxCoopCpuChooseMove(true,true,false,false,false,false)==MMX_CPU_MOVE_JUMP,
       "ground probe: missing ground with a landing means jump");
   check(MmxCoopCpuChooseMove(true,false,false,false,false,true)==MMX_CPU_MOVE_WAIT,
