@@ -1059,6 +1059,14 @@ static void coop_cpu_sensing_checks(void) {
       "follow X standing left even when X moves right");
   check(MmxCoopCpuFollowDirection(30)==0,
       "follow deadzone avoids jitter at short distance");
+  check(MmxCoopCpuAirRouteDirection(11,1,true)==1,
+      "airborne crossing keeps right despite 11px leader deadzone");
+  check(MmxCoopCpuAirRouteDirection(-11,1,true)==1,
+      "airborne crossing cannot reverse from small leader movement");
+  check(MmxCoopCpuAirRouteDirection(11,-1,true)==-1,
+      "airborne leftward crossing also keeps its takeoff direction");
+  check(MmxCoopCpuAirRouteDirection(-80,1,false)==-1,
+      "landing releases flight commitment and resumes positional follow");
   check(MmxCoopCpuPitApproachTicks(116)>100,
       "pit route persists through a long airborne wall approach");
   check(MmxCoopCpuPitApproachTicks(76)>=MmxCoopCpuPitApproachTicks(116)-40,
