@@ -1053,6 +1053,12 @@ static void coop_slime_checks(const char *fixture,uint8_t *start,uint8_t *expect
  * warning is resolved BEFORE ordinary left/right follow input is issued.
  * The actual sensors and jump physics still need a ROM-backed level test. */
 static void coop_cpu_sensing_checks(void) {
+  check(MmxCoopCpuFollowDirection(120)==1,
+      "follow X standing right even when X moves left");
+  check(MmxCoopCpuFollowDirection(-120)==-1,
+      "follow X standing left even when X moves right");
+  check(MmxCoopCpuFollowDirection(30)==0,
+      "follow deadzone avoids jitter at short distance");
   check(MmxCoopCpuChooseMove(true,true,false,false,false,false)==MMX_CPU_MOVE_JUMP,
       "ground probe: missing ground with a landing means jump");
   check(MmxCoopCpuChooseMove(true,false,false,false,false,true)==MMX_CPU_MOVE_WAIT,
@@ -1337,10 +1343,8 @@ static void coop_cpu_companion_checks(const char *fixture) {
   MmxCoopSetCpuCompanion(false);
   MmxCoopSetCpuCompanion(true);
 
-  /* The human can run toward a companion who is already AHEAD: do not
-   * force the CPU to turn away from an approaching obstacle. A stationary
-   * companion with valid ground should also attempt its own jump after
-   * repeated left/right movement inputs fail to make progress. */
+  /* A human moving toward an already-ahead CPU must not pull the CPU
+   * farther away from the human. Ordinary stall jump should still work. */
   MmxCoopSetCpuCompanion(false);
   MmxCoopSetCpuCompanion(true);
   s=MmxCoopGetState();
@@ -1356,8 +1360,8 @@ static void coop_cpu_companion_checks(const char *fixture) {
   unsigned toward=route>0?SNES_PAD_RIGHT:SNES_PAD_LEFT;
   MmxCoopPoll((uint16_t)toward,0);
   s=MmxCoopGetState();
-  check(s.players[1].input&toward,
-      "CPU follows human travel intent when companion is already ahead");
+  check(!(s.players[1].input&toward),
+      "CPU does not follow a human input away from the human position");
   bool jumped=false;
   for(unsigned ticks=0;ticks<24;++ticks) {
     /* Intentionally hold the snapshot motion still to simulate a solid,
