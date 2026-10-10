@@ -1475,55 +1475,68 @@ static void coop_cpu_companion_checks(const char *fixture) {
   check(s.players[0].input==SNES_PAD_LEFT,
       "controlled Zero fallen: DualSense immediately returns to living X");
 
-  /* X3 Zero's real buster charges by HOLDING Y. Do not waste it on
-   * taps every twelve ticks while X is being followed. Release only
-   * with a valid enemy in front and a charge-capable idle weapon. */
+  /* Full X3 charge only on a major enemy; small 21-frame native buster
+   * shots for ordinary targets; no useless stored charge on empty air. */
   s.players[1].status=MMX_COOP_ALIVE;
   s.players[1].body[0x27]|=1;
+  s.players[1].body[2]=0;
   s.players[1].zero.modern.enabled=0;
   s.players[1].zero.charge=0;
-  s.players[1].zero.burst=0;
-  s.players[1].zero.combo=0;
+  s.players[1].zero.burst=s.players[1].zero.combo=0;
   s.players[1].zero.slash=0;
   MmxCoopSetState(&s);
   g_ram[enemy]=0;
   MmxCoopPoll(0,0);s=MmxCoopGetState();
-  check((s.players[1].input&SNES_PAD_Y)!=0,
-      "X3 CPU Zero holds Y to charge his powerful native buster");
-  s.players[0].body[5]=(uint8_t)(coop_x(&s.players[1])+80);
-  s.players[0].body[6]=(uint8_t)((coop_x(&s.players[1])+80)>>8);
-  s.players[1].zero.charge=141;
-  s.players[1].body[0x69]|=64; /* Face target on the right. */
-  MmxCoopSetState(&s);
-  unsigned foe_x=coop_x(&s.players[1])+48,foe_y=coop_y(&s.players[1]);
+  check(!(s.players[1].input&SNES_PAD_Y),
+      "CPU Zero does not charge when no target exists");
+  check(MmxCoopCpuZeroChargeGoal(false)==21 &&
+        MmxCoopCpuZeroChargeGoal(true)==201,
+      "quick ordinary buster and full 201-frame boss charge");
+  unsigned zx=coop_x(&s.players[1]),zy=coop_y(&s.players[1]);
+  s.players[0].body[5]=(uint8_t)(zx+80);
+  s.players[0].body[6]=(uint8_t)((zx+80)>>8);
   g_ram[enemy]=1;g_ram[enemy+14]=1;g_ram[enemy+0x27]=15;
+  g_ram[enemy+10]=0x7f; /* Explicit non-boss kind. */
+  unsigned foe_x=zx+48,foe_y=zy;
   g_ram[enemy+5]=(uint8_t)foe_x;g_ram[enemy+6]=(uint8_t)(foe_x>>8);
   g_ram[enemy+8]=(uint8_t)foe_y;g_ram[enemy+9]=(uint8_t)(foe_y>>8);
-  MmxCoopPoll(0,0);s=MmxCoopGetState();
-  check(!(s.players[1].input&SNES_PAD_Y),
-      "X3 CPU Zero releases fully charged buster toward a real enemy");
-  /* A tall miniboss behind Zero must be considered a real target:
-   * turning first is required, and a faster mid-tier release is useful
-   * when the enemy is close rather than hoarding a 141-tick charge. */
-  unsigned bx=coop_x(&s.players[1])-48;
-  unsigned by=coop_y(&s.players[1])+72;
-  g_ram[enemy+10]=0x01; /* Known miniboss encounter class. */
-  g_ram[enemy+5]=(uint8_t)bx;g_ram[enemy+6]=(uint8_t)(bx>>8);
-  g_ram[enemy+8]=(uint8_t)by;g_ram[enemy+9]=(uint8_t)(by>>8);
-  s.players[1].zero.charge=90;
+  s.players[1].body[0x69]|=64; /* Facing target right. */
+  s.players[1].zero.charge=20;
   s.players[1].input=SNES_PAD_Y;
-  s.players[1].body[0x69]|=64; /* Currently facing away. */
   MmxCoopSetState(&s);
   MmxCoopPoll(0,0);s=MmxCoopGetState();
   check((s.players[1].input&SNES_PAD_Y)!=0,
-      "miniboss behind: keep charge until Zero faces the enemy");
-  s.players[1].zero.charge=90;
+      "ordinary enemy: continue charging before small-shot threshold");
+  s.players[1].zero.charge=21;
   s.players[1].input=SNES_PAD_Y;
-  s.players[1].body[0x69]&=(uint8_t)~64; /* Face left at miniboss. */
   MmxCoopSetState(&s);
   MmxCoopPoll(0,0);s=MmxCoopGetState();
   check(!(s.players[1].input&SNES_PAD_Y),
-      "miniboss: CPU Zero releases earlier toward off-height enemy");
+      "ordinary enemy: release promptly for quick buster shot");
+  unsigned bx=zx-48,by=zy+72;
+  g_ram[enemy+10]=0x01; /* Known miniboss class. */
+  g_ram[enemy+5]=(uint8_t)bx;g_ram[enemy+6]=(uint8_t)(bx>>8);
+  g_ram[enemy+8]=(uint8_t)by;g_ram[enemy+9]=(uint8_t)(by>>8);
+  s.players[1].zero.charge=201;
+  s.players[1].input=SNES_PAD_Y;
+  s.players[1].body[0x69]|=64; /* Wrong facing: don't waste full charge. */
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check((s.players[1].input&SNES_PAD_Y)!=0,
+      "miniboss behind: keep full charge until actually facing it");
+  s.players[1].zero.charge=141;
+  s.players[1].input=SNES_PAD_Y;
+  s.players[1].body[0x69]&=(uint8_t)~64;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check((s.players[1].input&SNES_PAD_Y)!=0,
+      "miniboss: 141 charge must wait for full X3 tier");
+  s.players[1].zero.charge=201;
+  s.players[1].input=SNES_PAD_Y;
+  MmxCoopSetState(&s);
+  MmxCoopPoll(0,0);s=MmxCoopGetState();
+  check(!(s.players[1].input&SNES_PAD_Y),
+      "miniboss: release full 201 charge while facing it");
   g_ram[enemy]=0;g_ram[enemy+10]=0;
   MmxCoopSetSwitchTrigger(false);
   MmxCoopSetCpuCompanion(false);
