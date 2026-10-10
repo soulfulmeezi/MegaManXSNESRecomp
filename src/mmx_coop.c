@@ -991,7 +991,6 @@ typedef struct { bool found,boss; int direction,distance; } MmxCpuTarget;
 static MmxCpuTarget cpu_companion_attack_target(const uint8_t *r,int x,int y) {
   MmxCpuTarget pick={0};
   if (!r) return pick;
-  bool encounter=boss_fight(r);
   int best_score=100000;
   for (unsigned d=0xe68;d<0x1228;d+=64) {
     if (!r[d] || !r[d+14] || !(r[d+0x27]&127)) continue;
@@ -999,7 +998,7 @@ static MmxCpuTarget cpu_companion_attack_target(const uint8_t *r,int x,int y) {
     unsigned kind=r[d+10];
     bool major=MmxWidePolicy_IsBossEncounter((uint8_t)kind) ||
         kind==0x26 || kind==0x67 || kind==0x69 || kind==0x01;
-    bool wide=major || encounter;
+    bool wide=major;
     if (abs(dx)<10 || abs(dx)>(wide?220:152) ||
         abs(dy)>(wide?112:40)) continue;
     int score=abs(dx)+abs(dy)/2-(major?240:0);
@@ -1027,9 +1026,12 @@ static uint16_t cpu_companion_zero_combat(const uint8_t *r,
           (f->body[0x69]&64 ? 1 : -1);
   bool recovering=cpu_wall_recovery_phase!=MMX_CPU_WALL_IDLE;
   MmxCpuTarget target=cpu_companion_attack_target(r,x,y);
-  /* Aim at a nearby miniboss instead of blindly facing X. Only steer
-   * on verified solid ground; pit and wall-jump inputs have priority. */
-  bool safe_turn=target.found && target.boss && !recovering &&
+  /* Aim at ordinary enemies and bosses without overriding safe navigation.
+   * A brief native direction input turns Zero, and once he is facing a
+   * nearby enemy he can stand and fire instead of walking into it. */
+  int facing=(f->body[0x69]&64)?1:-1;
+  bool aimed=target.found && facing==target.direction;
+  bool safe_turn=target.found && !recovering &&
       (f->body[0x2b]&4)!=0 &&
       !(input&(MMX_CPU_JUMP|MMX_CPU_DASH)) &&
       !cpu_pit_wall_ticks && !cpu_air_route_ticks &&
@@ -1038,12 +1040,10 @@ static uint16_t cpu_companion_zero_combat(const uint8_t *r,
       !cpu_companion_obstacle_ahead(r,x,y,target.direction);
   if (safe_turn) {
     input&=(uint16_t)~(MMX_CPU_LEFT|MMX_CPU_RIGHT);
-    input|=target.direction>0?MMX_CPU_RIGHT:MMX_CPU_LEFT;
+    if (!aimed || target.distance>(target.boss?80:65))
+      input|=target.direction>0?MMX_CPU_RIGHT:MMX_CPU_LEFT;
     dir=target.direction;
   }
-  /* Facing comes from the prior native frame: turn before firing. */
-  bool aimed=target.found &&
-      ((f->body[0x69]&64)?1:-1)==target.direction;
   if (target.found && target.boss && getenv("MMX_CPU_TRACE") &&
       snes_frame_counter%45==0)
     fprintf(stderr,
@@ -1063,25 +1063,28 @@ static uint16_t cpu_companion_zero_combat(const uint8_t *r,
       cpu_zero_melee_cooldown=target.boss?16:22;
     }
   } else {
-    /* X3 mode: build a powerful shot while running and jumping. Fire on
-     * release only if an enemy is in front AND the native player isn't
-     * busy with a wall-recovery or an earlier charged burst. With no
-     * target, hold a full ready charge rather than waste it at empty air. */
-    bool ready=f->zero.charge>=(target.boss?81u:141u);
+    /* Alternate native HOLD-Y and RELEASE-Y. Small ordinary targets get
+     * a shot at 21 ticks, major bosses a full 201-tick X3 charge.
+     * Do not appear idle by hoarding a charged buster in an empty room. */
+    unsigned goal=MmxCoopCpuZeroChargeGoal(target.boss);
     bool busy=f->zero.burst || f->zero.slash || f->zero.combo ||
               f->zero.swap_phase;
-    if (ready && target.found && aimed && !recovering && !busy &&
-        (f->input&MMX_CPU_FIRE)) {
-      /* Native X3 fires on RELEASE, not on a continuous unheld pad.
-       * If a charge release was suppressed by an action/animation, rearm
-       * Y for one tick so we can try again with a real input edge. */
+    bool release=target.found && aimed && !recovering && !busy &&
+        f->zero.charge>=goal && (f->input&MMX_CPU_FIRE);
+    if (release) {
       input&=(uint16_t)~MMX_CPU_FIRE;
       if (getenv("MMX_CPU_TRACE"))
         fprintf(stderr,
-            "[cpu-attack] Zero X3 release charge=%u x=%d y=%d "
-            "boss=%d dist=%d dir=%d\n",
-            (unsigned)f->zero.charge,x,y,
-            (int)target.boss,target.distance,target.direction);
+            "[cpu-attack] Zero X3 %s charge=%u goal=%u x=%d y=%d "
+            "dist=%d dir=%d\n",
+            target.boss?"FULL BOSS BURST":"quick shot",
+            (unsigned)f->zero.charge,goal,x,y,
+            target.distance,target.direction);
+    } else if (!target.found) {
+      input&=(uint16_t)~MMX_CPU_FIRE;
+    } else if (!target.boss && f->zero.charge>=42 && !aimed) {
+      /* Unable to turn? Discard the small charge, never fill to 201. */
+      input&=(uint16_t)~MMX_CPU_FIRE;
     } else input|=MMX_CPU_FIRE;
   }
   /* Ground dash on VERIFIED clear terrain for fast catching up, including
