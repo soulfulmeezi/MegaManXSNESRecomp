@@ -11,6 +11,7 @@
 #include "mmx_coop_view.h"
 #include "sdl_compat.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 extern uint8_t g_ram[0x20000];
@@ -134,8 +135,18 @@ static void hook(CpuState *cpu, uint32_t pc) {
     }
     case 0x049e76: {
       unsigned original = cpu_read8(cpu, cpu->DB, (uint16_t)(0xef37 + cpu->Y));
-      unsigned damage = MmxWeaponsDamage(g_ram, cpu->D, cpu->X,
+      unsigned base = MmxWeaponsDamage(g_ram, cpu->D, cpu->X,
           MmxZeroDamage(g_ram, cpu->D, cpu->X, original));
+      /* Hooked at final enemy damage resolution, shared by native and
+       * imported weapons. Both human and CPU Zero qualify; X does not.
+       * Multiply AFTER boss resistance, original hit immunity and the
+       * fractional weapon accumulator have been resolved. */
+      unsigned damage=MmxZeroDamageBoost(
+          base,MmxZeroActive(),cpu->D,cpu->X);
+      if (damage!=base && getenv("MMX_CPU_TRACE"))
+        fprintf(stderr,
+            "[zero-damage] enemy=%04x projectile=%04x base=%u boosted=%u\n",
+            (unsigned)cpu->D,(unsigned)cpu->X,base,damage);
       if (damage == original) break;
       /* Post-SBC: retain the interpreter's instruction timing, but recompute
        * its value and all arithmetic flags with our damage operand. The HP
