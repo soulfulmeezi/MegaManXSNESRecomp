@@ -1779,6 +1779,7 @@ void MmxCoopPoll(uint16_t p1, uint16_t p2) {
       getenv("MMX_HUMAN_TRACE")) {
     static int previous_action=-1,previous_seat=-1;
     const MmxCoopPlayer *h=&state.players[cpu_human_seat];
+    const MmxCoopPlayer *c=&state.players[cpu_human_seat^1];
     int action=h->body[2];
 
     bool button_edge=
@@ -1793,14 +1794,36 @@ void MmxCoopPoll(uint16_t p1, uint16_t p2) {
         (climbing && snes_frame_counter%4==0)) {
       fprintf(stderr,
           "[human-move] frame=%d player=%s x=%u y=%u "
-          "action=%d ground=%d pad=%03x pressed=%03x\\n",
+          "action=%d ground=%d pad=%03x pressed=%03x\n",
           snes_frame_counter,
           h->character==MMX_COOP_ZERO?"Zero":"X",
           word(h->body+5),word(h->body+8),
           action,(h->body[0x2b]&4)!=0,
           (unsigned)h->input,(unsigned)h->pressed);
     }
-
+    /* Compare the controlled character with the CPU on the SAME
+     * frame. Repeated positions with cpu_dir=R show native movement
+     * has stalled despite a held-right controller command. */
+    if (snes_frame_counter%6==0 || button_edge ||
+        cpu_human_seat!=previous_seat) {
+      int hx=(int)word(h->body+5),hy=(int)word(h->body+8);
+      int cx=(int)word(c->body+5),cy=(int)word(c->body+8);
+      char cpu_dir=(c->input&MMX_CPU_RIGHT)?'R':
+                   (c->input&MMX_CPU_LEFT)?'L':'-';
+      fprintf(stderr,
+          "[pair-move] frame=%d human=%s hx=%d hy=%d ha=%u hg=%d "
+          "hpad=%03x cpu=%s cx=%d cy=%d ca=%u cg=%d "
+          "cpu_dir=%c cdash=%d cjump=%d cpad=%03x dx=%d\n",
+          snes_frame_counter,
+          h->character==MMX_COOP_ZERO?"Zero":"X",
+          hx,hy,(unsigned)h->body[2],(int)((h->body[0x2b]&4)!=0),
+          (unsigned)h->input,
+          c->character==MMX_COOP_ZERO?"Zero":"X",
+          cx,cy,(unsigned)c->body[2],(int)((c->body[0x2b]&4)!=0),
+          cpu_dir,(int)((c->input&MMX_CPU_DASH)!=0),
+          (int)((c->input&MMX_CPU_JUMP)!=0),
+          (unsigned)c->input,hx-cx);
+    }
     previous_action=action;
     previous_seat=cpu_human_seat;
   }
