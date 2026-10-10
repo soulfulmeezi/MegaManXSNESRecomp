@@ -84,6 +84,17 @@ static inline int MmxCoopCpuAirRouteDirection(
 static inline uint8_t MmxCoopCpuPitApproachTicks(int distance) {
   return distance>=96 ? 220 : 180;
 }
+/* A long climb may need a brief OUTWARD kick, just like a player.
+ * Keep ordinary slides and the verified wall climb as the default. */
+static inline uint8_t MmxCoopCpuWallPushFrames(bool tall, bool arc_mode) {
+  return tall ? (arc_mode ? 5u : 0u) : 4u;
+}
+static inline bool MmxCoopCpuWallApex(int current_y,int previous_y,
+                                      bool arc_mode) {
+  /* Integer pixel coordinates can briefly repeat DURING ascent.
+   * Wide-arc mode waits for genuine downward motion. */
+  return arc_mode ? current_y>previous_y : current_y>=previous_y;
+}
 
 /* Pure controller decision for one local companion terrain scan.
  * Sensor inputs belong to the CPU's OWN position, never the human jump pad.
