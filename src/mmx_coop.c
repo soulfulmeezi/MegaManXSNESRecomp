@@ -1299,8 +1299,14 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
     } else {
       direction=cpu_pit_wall_direction;
       --cpu_pit_wall_ticks;
-      if (!cpu_pit_wall_ticks && getenv("MMX_CPU_TRACE"))
-        fprintf(stderr,"[cpu-pit] approach expired x=%d y=%d\n",x,y);
+      if (!cpu_pit_wall_ticks) {
+        if (getenv("MMX_CPU_TRACE"))
+          fprintf(stderr,
+              "[cpu-pit] approach expired x=%d y=%d airborne=%d dir=%d\n",
+              x,y,(int)!grounded,(int)cpu_pit_wall_direction);
+        cpu_pit_wall_direction=0;
+        cpu_pit_wall_was_airborne=false;
+      }
     }
   }
   bool wall_slide=!grounded && follower->body[2]==0x12;
@@ -1492,13 +1498,16 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
    * The confirmed pit-wall direction is maintained until actual wall
    * contact, landing, or a bounded route timeout. */
   if (cpu_pit_wall_ticks && !grounded && cpu_pit_wall_direction) {
+    /* This input remains pressed after dash/B have naturally finished.
+     * Never use the changing leader deadzone to release the wall approach. */
     input&=(uint16_t)~(MMX_CPU_LEFT|MMX_CPU_RIGHT);
     input|=cpu_pit_wall_direction>0 ? MMX_CPU_RIGHT : MMX_CPU_LEFT;
-    if (getenv("MMX_CPU_TRACE") && !cpu_cliff_dash_frames &&
-        snes_frame_counter%24==0)
+    if (getenv("MMX_CPU_TRACE") && snes_frame_counter%16==0)
       fprintf(stderr,
-          "[cpu-pit] forward glide x=%d y=%d dir=%d action=%u\n",
-          x,y,(int)cpu_pit_wall_direction,(unsigned)follower->body[2]);
+          "[cpu-pit-drive] x=%d y=%d dx=%d dir=%d action=%u ticks=%u dash_ticks=%u pad=%c\n",
+          x,y,dx,(int)cpu_pit_wall_direction,(unsigned)follower->body[2],
+          (unsigned)cpu_pit_wall_ticks,(unsigned)cpu_cliff_dash_frames,
+          (input&MMX_CPU_RIGHT)?'R':(input&MMX_CPU_LEFT)?'L':'-');
   }
   /* Shoot nearby enemies outside jump takeoff/kick phases. */
   int facing=direction ? direction : (follower->body[0x69]&64 ? 1 : -1);
@@ -1621,7 +1630,7 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
           MmxWeaponsTerrainSolid(ram,x+offset,y-35,false,NULL))
         headroom=false;
     if (headroom && !cpu_jump_cooldown_frames) {
-      cpu_pit_wall_ticks=pit_wall_distance>=96 ? 100 : 72;
+      cpu_pit_wall_ticks=MmxCoopCpuPitApproachTicks(pit_wall_distance);
       cpu_pit_wall_direction=(int8_t)direction;
       cpu_pit_wall_was_airborne=false;
       /* Standard crossing holds native B for a high dash-jump.
