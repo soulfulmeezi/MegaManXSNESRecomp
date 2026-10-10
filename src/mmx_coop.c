@@ -51,6 +51,9 @@ static uint8_t cpu_wall_jump_hold_frames;
 /* Tall ascents can require many successive native wall-kicks. Ordinary
  * accidental slides keep the original two-kick safety limit. */
 static bool cpu_tall_wall_climb;
+/* An elevated, reachable platform calls for steering INTO the wall even
+ * below the 96px high-climb threshold. Ordinary slips still kick away. */
+static bool cpu_wall_goal_climb;
 static uint16_t cpu_tall_wall_start_y, cpu_tall_wall_best_y;
 static uint16_t cpu_tall_wall_kick_x, cpu_tall_wall_kick_y;
 /* Count wall-jump opportunities from native engine state, not a timer.
@@ -382,7 +385,8 @@ static void cpu_companion_reset_motion(void) {
   cpu_wall_recovery_phase=cpu_wall_recovery_jumps=cpu_wall_recovery_ticks=0;
   cpu_wall_recovery_left_slide=cpu_wall_buffer_pending=cpu_wall_buffer_attempted=false;
   cpu_wall_jump_hold_frames=0;cpu_wall_y_valid=false;cpu_wall_last_y=0;
-  cpu_tall_wall_climb=false;cpu_tall_wall_start_y=cpu_tall_wall_best_y=0;
+  cpu_tall_wall_climb=cpu_wall_goal_climb=false;
+  cpu_tall_wall_start_y=cpu_tall_wall_best_y=0;
   cpu_tall_wall_kick_x=cpu_tall_wall_kick_y=0;
   cpu_tall_wall_trace_ticks=0;
   cpu_jump_direction=cpu_wall_direction=0;
@@ -1154,7 +1158,7 @@ static uint16_t cpu_companion_wall_recovery(const MmxCoopPlayer *f,
       if (getenv("MMX_CPU_TRACE"))
         fprintf(stderr,"[cpu-wall] buffered kick confirmed %u/%u action=16 frame=%d\n",
                 (unsigned)cpu_wall_recovery_jumps,max_kicks,snes_frame_counter);
-      return (cpu_tall_wall_climb ? toward : away)|MMX_CPU_JUMP;
+      return (cpu_wall_goal_climb ? toward : away)|MMX_CPU_JUMP;
     }
     /* Native code did not accept the buffer. Release B to re-arm the
      * next opportunity; do not spend a jump or wait for a cooldown. */
@@ -1236,7 +1240,7 @@ static uint16_t cpu_companion_wall_recovery(const MmxCoopPlayer *f,
   if (cpu_wall_recovery_phase==MMX_CPU_WALL_PUSH) {
     /* Native wall-kick already provides a strong push-off.
      * Pressing AWAY again prevented high-wall reattachment. */
-    steer=cpu_tall_wall_climb ? toward : away;
+    steer=cpu_wall_goal_climb ? toward : away;
     if (cpu_wall_recovery_ticks) --cpu_wall_recovery_ticks;
     if (!cpu_wall_recovery_ticks) {
       cpu_wall_recovery_phase=MMX_CPU_WALL_RETURN;
@@ -1396,7 +1400,8 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
     cpu_wall_recovery_phase=cpu_wall_recovery_jumps=cpu_wall_recovery_ticks=0;
     cpu_wall_recovery_left_slide=cpu_wall_buffer_pending=cpu_wall_buffer_attempted=false;
     cpu_wall_jump_hold_frames=0;
-    cpu_tall_wall_climb=false;cpu_tall_wall_start_y=cpu_tall_wall_best_y=0;
+    cpu_tall_wall_climb=cpu_wall_goal_climb=false;
+  cpu_tall_wall_start_y=cpu_tall_wall_best_y=0;
     cpu_tall_wall_trace_ticks=0;
     cpu_tall_wall_kick_x=cpu_tall_wall_kick_y=0;
     cpu_wall_direction=0;
@@ -1429,6 +1434,10 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
       bool pit_wall_arrival=cpu_pit_wall_ticks &&
           cpu_pit_wall_was_airborne &&
           cpu_wall_direction==cpu_pit_wall_direction;
+      bool elevated_wall_goal=(leader->body[0x2b]&4)!=0 &&
+          (int)word(leader->body+8)<=y-32 &&
+          abs(dx)<=176 && cpu_wall_direction*dx>=0;
+      cpu_wall_goal_climb=pit_wall_arrival || elevated_wall_goal;
       cpu_tall_wall_climb=pit_wall_arrival ||
           ((leader->body[0x2b]&4)!=0 &&
            ((int)word(leader->body+8) <= y-96));
@@ -1443,15 +1452,16 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
       cpu_tall_wall_kick_x=(uint16_t)x;
       cpu_tall_wall_kick_y=(uint16_t)y;
       if (getenv("MMX_CPU_TRACE"))
-        fprintf(stderr,"[cpu-wall] contact dir=%d action=%u vy=%d slide=%d tall=%d leader_above=%d\n",
+        fprintf(stderr,"[cpu-wall] contact dir=%d action=%u vy=%d slide=%d tall=%d goal=%d leader_above=%d\n",
                 (int)cpu_wall_direction,(unsigned)follower->body[2],
                 (int16_t)word(follower->body+0x1c),(int)wall_slide,
-                (int)cpu_tall_wall_climb,y-(int)word(leader->body+8));
+                (int)cpu_tall_wall_climb,(int)cpu_wall_goal_climb,
+                y-(int)word(leader->body+8));
     }
     if (cpu_tall_wall_climb && y<(int)cpu_tall_wall_best_y)
       cpu_tall_wall_best_y=(uint16_t)y;
     bool near=cpu_companion_wall_jump_near(ram,x,y,cpu_wall_direction);
-    bool upper_lip=cpu_tall_wall_climb &&
+    bool upper_lip=cpu_wall_goal_climb &&
         (leader->body[0x2b]&4) &&
         abs((int)word(leader->body+8)-y)<=48 &&
         cpu_companion_upper_lip(
@@ -1518,6 +1528,15 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
             (unsigned)cpu_wall_recovery_jumps);
       }
     }
+    if (cpu_wall_goal_climb && getenv("MMX_CPU_TRACE") &&
+        snes_frame_counter%12==0)
+      fprintf(stderr,
+          "[cpu-wall-drive] x=%d y=%d dir=%d pad=%c B=%d kicks=%u tall=%d lip=%d\n",
+          x,y,(int)cpu_wall_direction,
+          (wall_input&MMX_CPU_RIGHT)?'R':(wall_input&MMX_CPU_LEFT)?'L':'-',
+          (int)((wall_input&MMX_CPU_JUMP)!=0),
+          (unsigned)cpu_wall_recovery_jumps,
+          (int)cpu_tall_wall_climb,(int)upper_lip);
     return wall_input;
   }
   /* Preserve takeoff direction and hold B long enough for a useful ascent,
