@@ -79,6 +79,11 @@ static bool cpu_pit_wall_was_airborne;
 static uint8_t cpu_air_route_ticks;
 static int8_t cpu_air_route_dir;
 static bool cpu_air_route_was_airborne;
+/* Host-only cache of live 16px collision cells near the Highway CPU.
+ * It detects REAL terrain-map changes, never guessing from graphics.
+ * Used only when MMX_CPU_CRUMBLE=1 and stage id 0 (intro highway). */
+typedef struct {int16_t x,y;uint8_t tile,valid;} MmxCpuGroundCell;
+static MmxCpuGroundCell cpu_ground_cells[128];
 static uint16_t cpu_last_x;
 static int8_t cpu_jump_direction, cpu_wall_direction, cpu_stall_direction;
 static unsigned starting_character;
@@ -398,6 +403,7 @@ static void cpu_companion_reset_motion(void) {
   cpu_pit_wall_was_airborne=false;
   cpu_air_route_ticks=0;cpu_air_route_dir=0;
   cpu_air_route_was_airborne=false;
+  memset(cpu_ground_cells,0,sizeof(cpu_ground_cells));
 }
 void MmxCoopReset(void) {
   cpu_companion_reset_motion();cpu_human_seat=cpu_swap_trigger_down=cpu_rescue_cooldown=0;
@@ -692,6 +698,54 @@ enum {
 static bool cpu_companion_supported(const uint8_t *ram, int x, int feet) {
   for (int depth=0; depth<=20; depth+=4)
     if (MmxWeaponsTerrainSolid(ram,x,feet+depth,true,NULL)) return true;
+  return false;
+}
+/* Compare the SAME world cell across frames. This captures highway road
+ * actually disappearing from the collision map. A class change indicates
+ * a mutable cell; it does not necessarily prove a future collapse. */
+static void cpu_companion_watch_road_cell(const uint8_t *ram,int x,int y) {
+  if (!ram || x<0 || x>=8192 || y<0 || y>=8192) return;
+  int cell_x=(x&~15)+8,cell_y=(y&~15)+8;
+  unsigned hash=(((unsigned)cell_x>>4)*29u+
+                 ((unsigned)cell_y>>4)*11u)&127u;
+  MmxCpuGroundCell *cell=&cpu_ground_cells[hash];
+  unsigned tile=MmxWeaponsTerrainClass(ram,cell_x,cell_y);
+  if (cell->valid && cell->x==cell_x && cell->y==cell_y &&
+      cell->tile!=tile && getenv("MMX_CPU_TRACE")) {
+    fprintf(stderr,
+        "[cpu-crumble-map] frame=%d x=%d y=%d old=%u new=%u\n",
+        snes_frame_counter,cell_x,cell_y,
+        (unsigned)cell->tile,tile);
+  }
+  cell->valid=1;cell->x=(int16_t)cell_x;
+  cell->y=(int16_t)cell_y;cell->tile=(uint8_t)tile;
+}
+/* On the intro Highway, begin sensing the NEXT hole while still 20-72px
+ * away, rather than waiting until the ordinary 20px edge probe. Cracked
+ * sections can fall beneath the CPU, so a verified landing gets priority.
+ * Avoid speculative jumps: the destination must be a separate walkable
+ * platform with support further into it and no blocked headspace. */
+static bool cpu_companion_crumble_route(const uint8_t *ram,int x,int feet,
+                                        int dir,int *gap_out,int *landing_out) {
+  if (!ram || !dir || ram[0x1f7a]!=0 ||
+      !cpu_companion_supported(ram,x,feet)) return false;
+  int first_gap=0;
+  for (int d=20;d<=72;d+=4) {
+    if (!cpu_companion_supported(ram,x+dir*d,feet)) {
+      first_gap=d;break;
+    }
+  }
+  if (!first_gap) return false;
+  for(int d=first_gap+24;d<=176;d+=8) {
+    int sx=x+dir*d;
+    if (!cpu_companion_landing(ram,sx,feet) ||
+        !cpu_companion_supported(ram,sx+dir*16,feet) ||
+        MmxWeaponsTerrainSolid(ram,sx,feet-28,false,NULL) ||
+        MmxWeaponsTerrainSolid(ram,sx,feet-44,false,NULL)) continue;
+    if (gap_out) *gap_out=first_gap;
+    if (landing_out) *landing_out=d;
+    return true;
+  }
   return false;
 }
 /* Short, directional ground-level rays from the follower's OWN feet.
@@ -1693,6 +1747,36 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
   if (!grounded || !direction) return input;
   int feet=y+16;
   bool edge=cpu_companion_ground_missing(ram,x,feet,direction);
+  /* Experimental breaking-ground awareness: inspect the CURRENT map
+   * near Zero and confirm a distinct landing beyond the hole. The scan
+   * is enabled only when requested and only on the introductory highway. */
+  bool crumble_enabled=getenv("MMX_CPU_CRUMBLE")!=NULL &&
+      ram[0x1f7a]==0;
+  if (crumble_enabled) for(int d=-16;d<=128;d+=16)
+    cpu_companion_watch_road_cell(ram,x+direction*d,feet+2);
+  int crumble_gap=0,crumble_landing=0;
+  bool crumble_route=crumble_enabled && !cpu_air_route_ticks &&
+      cpu_companion_crumble_route(
+          ram,x,feet,direction,&crumble_gap,&crumble_landing);
+  if (crumble_route) {
+    bool clear_headroom=true;
+    for(int d=-6;d<=6;d+=6)
+      if (MmxWeaponsTerrainSolid(ram,x+d,y-25,false,NULL) ||
+          MmxWeaponsTerrainSolid(ram,x+d,y-35,false,NULL))
+        clear_headroom=false;
+    crumble_route=MmxCoopCpuCrumbleJumpAllowed(
+        grounded,crumble_gap,crumble_landing,clear_headroom);
+  }
+  if (crumble_route && !edge) {
+    edge=true; /* Upgrade a distant visible hole to early edge warning. */
+    if (getenv("MMX_CPU_TRACE") &&
+        snes_frame_counter%24==0)
+      fprintf(stderr,
+          "[cpu-crumble] early gap x=%d feet=%d dir=%d "
+          "hole=%d landing=%d cooldown=%u\n",
+          x,feet,direction,crumble_gap,crumble_landing,
+          (unsigned)cpu_jump_cooldown_frames);
+  }
   bool obstacle=cpu_companion_obstacle_ahead(ram,x,y,direction);
   bool blocked=cpu_stall_ticks>=10;
   /* P1's Y position and B button must NOT influence CPU jump decisions.
@@ -1702,6 +1786,13 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
   int landing_distance=0, landing_rise=0;
   bool short_landing=edge && cpu_companion_gap_reachable(
       ram,x,feet,direction,&landing_distance,&landing_rise);
+  /* A positive beyond-gap landing is more relevant than a same-platform
+   * cell returned by the generic scanner before the road gives way. */
+  if (crumble_route) {
+    short_landing=true;
+    landing_distance=crumble_landing;
+    landing_rise=0;
+  }
   /* When X is already standing on a lower tier, a verified downward
    * landing may be more useful than a blind horizontal jump or WAIT. */
   int drop_distance=0,drop_depth=0;
@@ -1842,10 +1933,15 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
       headroom=false;break;
     }
   }
-  if (!headroom || cpu_jump_cooldown_frames) {
+  if (!headroom || (cpu_jump_cooldown_frames && !crumble_route)) {
     if (edge) input&=(uint16_t)~(MMX_CPU_LEFT|MMX_CPU_RIGHT);
     return input;
   }
+  if (crumble_route && getenv("MMX_CPU_TRACE"))
+    fprintf(stderr,
+        "[cpu-crumble] jump-before-collapse x=%d y=%d dir=%d "
+        "hole=%d landing=%d\n",
+        x,y,direction,crumble_gap,crumble_landing);
   /* Hold native jump for 21 input frames in total (this frame plus
    * 20 polls), allowing the game's variable-height jump to finish its
    * ascent. Release earlier if native ground contact returns or a real
