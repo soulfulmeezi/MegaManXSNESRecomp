@@ -1086,6 +1086,12 @@ static void coop_cpu_sensing_checks(void) {
   check(!MmxCoopCpuCrumbleJumpAllowed(false,48,104,true) &&
         !MmxCoopCpuCrumbleJumpAllowed(true,48,104,false),
       "breaking highway: no jump while airborne or under low ceiling");
+  check(MmxCoopCpuFullWallClimb(false,true),
+      "even a 38px elevated verified goal needs the full wall climb");
+  check(MmxCoopCpuFullWallClimb(true,false),
+      "opposite-wall pit catch retains full climbing budget");
+  check(!MmxCoopCpuFullWallClimb(false,false),
+      "incidental wall slide retains short two-kick safety limit");
   check(MmxCoopCpuWallPushFrames(true,true)==5,
       "wide-arc tall climb briefly steers away before returning");
   check(MmxCoopCpuWallPushFrames(true,false)==0 &&
@@ -1311,8 +1317,8 @@ static void coop_cpu_companion_checks(const char *fixture) {
   s.players[1].body[2]=0;
   MmxCoopSetState(&s);
 
-  /* Medium-elevation platform: keep pushing INTO the wall throughout
-   * the kick while retaining the ordinary two-kick recovery cap. */
+  /* Medium-elevation platform: push INTO the wall and use the full
+   * climb rather than quitting after two short kicks. */
   MmxCoopSetCpuCompanion(false);
   MmxCoopSetCpuCompanion(true);
   s=MmxCoopGetState();
