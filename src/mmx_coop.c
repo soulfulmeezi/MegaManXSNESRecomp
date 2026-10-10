@@ -788,6 +788,51 @@ static bool cpu_companion_lower_landing(const uint8_t *ram,
   }
   return false;
 }
+
+/* CPU wall climb: detect a reachable upper platform.
+ * Native movement and collision remain in control. */
+static bool cpu_companion_upper_lip(
+    const uint8_t *ram, int x, int feet, int dir)
+{
+  if (!ram || !dir) return false;
+
+  for (int distance = 24; distance <= 56; distance += 8) {
+    int lx = x + dir * distance;
+
+    for (int depth = 4; depth <= 28; depth += 4) {
+      int surface = 0;
+      int sample = feet + depth;
+
+      if (!cpu_companion_walkable(
+              MmxWeaponsTerrainClass(ram, lx, sample)))
+        continue;
+
+      if (!MmxWeaponsTerrainSolid(
+              ram, lx, sample, true, &surface))
+        continue;
+
+      if (surface < feet + 4 || surface > feet + 28)
+        continue;
+
+      if (MmxWeaponsTerrainSolid(
+              ram, lx, surface - 20, false, NULL))
+        continue;
+
+      if (MmxWeaponsTerrainSolid(
+              ram, lx, surface - 36, false, NULL))
+        continue;
+
+      if (!cpu_companion_supported(
+              ram, lx + dir * 8, surface + 2))
+        continue;
+
+      return true;
+    }
+  }
+
+  return false;
+}
+
 /* A normal-height landing check deliberately rejects elevated platforms.
  * A gap ending at a higher vertical wall is different: Zero may leap to the
  * wall, latch onto its native slide and climb with successive wall kicks.
@@ -1039,7 +1084,7 @@ static uint16_t cpu_companion_wall_recovery(const MmxCoopPlayer *f,
    * only CONFIRMED wall-kicks, never the attempted pre-slide B edge. */
   if (cpu_wall_buffer_pending) {
     cpu_wall_buffer_pending=false;
-    if (f->body[2]==0x12) {
+    if (f->body[2]==0x10) {
       ++cpu_wall_recovery_jumps;
       cpu_wall_recovery_left_slide=false;
       cpu_wall_recovery_phase=MMX_CPU_WALL_PUSH;
@@ -1051,7 +1096,7 @@ static uint16_t cpu_companion_wall_recovery(const MmxCoopPlayer *f,
       cpu_wall_recovery_ticks=cpu_tall_wall_climb ? 0 : 4;
       cpu_wall_jump_hold_frames=cpu_tall_wall_climb ? 24 : 17;
       if (getenv("MMX_CPU_TRACE"))
-        fprintf(stderr,"[cpu-wall] buffered kick confirmed %u/%u action=18 frame=%d\n",
+        fprintf(stderr,"[cpu-wall] buffered kick confirmed %u/%u action=16 frame=%d\n",
                 (unsigned)cpu_wall_recovery_jumps,max_kicks,snes_frame_counter);
       return (cpu_tall_wall_climb ? toward : away)|MMX_CPU_JUMP;
     }
@@ -1199,7 +1244,7 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
     }
   }
   bool grounded=(follower->body[0x2b]&4)!=0;
-  bool wall_slide=!grounded && follower->body[2]==0x10;
+  bool wall_slide=!grounded && follower->body[2]==0x12;
   /* Use actual Y-position change across game frames for descent, rather
    * than mistaking an upward wall-kick action $12 for a downward slide. */
   bool descending=!grounded && cpu_wall_y_valid &&
@@ -1281,14 +1326,34 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
     if (cpu_tall_wall_climb && y<(int)cpu_tall_wall_best_y)
       cpu_tall_wall_best_y=(uint16_t)y;
     bool near=cpu_companion_wall_jump_near(ram,x,y,cpu_wall_direction);
-    uint16_t wall_input=cpu_companion_wall_recovery(
-        follower,wall_slide,near,descending,kick_apex);
+    bool upper_lip=cpu_tall_wall_climb &&
+        (leader->body[0x2b]&4) &&
+        abs((int)word(leader->body+8)-y)<=48 &&
+        cpu_companion_upper_lip(
+            ram,x,y+16,cpu_wall_direction);
+
+    uint16_t wall_input;
+
+    if (upper_lip) {
+      wall_input=cpu_wall_direction>0 ?
+          MMX_CPU_RIGHT : MMX_CPU_LEFT;
+      cpu_wall_jump_hold_frames=0;
+
+      if (getenv("MMX_CPU_TRACE") &&
+          snes_frame_counter%30==0)
+        fprintf(stderr,
+            "[cpu-lip] upper ledge transfer x=%d y=%d dir=%d\\n",
+            x,y,(int)cpu_wall_direction);
+    } else {
+      wall_input=cpu_companion_wall_recovery(
+          follower,wall_slide,near,descending,kick_apex);
+    }
     /* Last-chance retreat: after a confirmed kick has already peaked
      * and Zero has dropped back to its starting height without finding
      * another wall slide, direct him to an ACTUALLY SUPPORTED lower shelf.
      * A Modern-mode Zero can add one native air dash for a distant
      * landing. X3 mode has a charged buster but no Modern air dash. */
-    if (cpu_wall_recovery_jumps && !wall_slide && !near && descending &&
+    if (!upper_lip && cpu_wall_recovery_jumps && !wall_slide && !near && descending &&
         y>=(int)cpu_tall_wall_kick_y &&
         (follower->body[2]==6 || follower->body[2]==8)) {
       int escape_dist=0;
@@ -1481,7 +1546,8 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat,
   /* Long safe crossings need dash momentum too, not only climbs.
    * A 100+px landing previously triggered an ordinary short ground jump
    * and often failed even when the route scan found a sound landing. */
-  cpu_cliff_dash_frames=(follower->character==MMX_COOP_ZERO &&
+  cpu_cliff_dash_frames=((follower->character==MMX_COOP_ZERO ||
+      (ram[0x1f99]&8)) &&
       ((move==MMX_CPU_MOVE_CLIMB && wall_distance>72) ||
        (edge && short_landing && landing_distance>80))) ? 20 : 0;
   uint16_t takeoff=(input&(uint16_t)~MMX_CPU_FIRE)|MMX_CPU_JUMP;
@@ -1553,6 +1619,36 @@ void MmxCoopPoll(uint16_t p1, uint16_t p2) {
   for (unsigned i = 0; i < 2; ++i) {
     state.players[i].pressed = inputs[i] & ~state.players[i].input;
     state.players[i].input = inputs[i];
+  }
+
+  if (offline_cpu && state.initialized &&
+      getenv("MMX_HUMAN_TRACE")) {
+    static int previous_action=-1,previous_seat=-1;
+    const MmxCoopPlayer *h=&state.players[cpu_human_seat];
+    int action=h->body[2];
+
+    bool button_edge=
+        (h->pressed&(MMX_CPU_JUMP|MMX_CPU_DASH))!=0;
+    bool climbing=action==6 || action==8 ||
+                  action==0x10 || action==0x12 ||
+                  action==0x14;
+
+    if (action!=previous_action ||
+        cpu_human_seat!=previous_seat ||
+        button_edge ||
+        (climbing && snes_frame_counter%4==0)) {
+      fprintf(stderr,
+          "[human-move] frame=%d player=%s x=%u y=%u "
+          "action=%d ground=%d pad=%03x pressed=%03x\\n",
+          snes_frame_counter,
+          h->character==MMX_COOP_ZERO?"Zero":"X",
+          word(h->body+5),word(h->body+8),
+          action,(h->body[0x2b]&4)!=0,
+          (unsigned)h->input,(unsigned)h->pressed);
+    }
+
+    previous_action=action;
+    previous_seat=cpu_human_seat;
   }
 }
 void MmxCoopApplyInput(uint8_t *r) {

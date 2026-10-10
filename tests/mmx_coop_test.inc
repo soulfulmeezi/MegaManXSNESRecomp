@@ -1173,7 +1173,7 @@ static void coop_cpu_companion_checks(const char *fixture) {
   MmxCoopSetCpuCompanion(true);
   s=MmxCoopGetState();
   s.players[1].body[0x2b]&=(uint8_t)~4;
-  s.players[1].body[2]=0x10; /* Native wall slide. */
+  s.players[1].body[2]=0x12; /* Native wall slide. */
   s.players[1].input=0;
   MmxCoopSetState(&s);
   MmxCoopPoll(0,0);s=MmxCoopGetState();
@@ -1200,7 +1200,7 @@ static void coop_cpu_companion_checks(const char *fixture) {
    * B is held from the first kick, so the first re-slide frame releases
    * it and the NEXT frame supplies a fresh B press edge. Two frames is
    * the earliest possible response for the game's edge-triggered input. */
-  s.players[1].body[2]=0x10;
+  s.players[1].body[2]=0x12;
   MmxCoopSetState(&s);
   MmxCoopPoll(away,0);s=MmxCoopGetState();
   check(!(s.players[1].input&SNES_PAD_B) && (s.players[1].input&toward_wall),
@@ -1241,7 +1241,7 @@ static void coop_cpu_companion_checks(const char *fixture) {
   MmxCoopSetCpuCompanion(true);
   s=MmxCoopGetState();
   s.players[1].body[0x2b]&=(uint8_t)~4;
-  s.players[1].body[2]=0x10;
+  s.players[1].body[2]=0x12;
   s.players[1].input=0;
   MmxCoopSetState(&s);
   MmxCoopPoll(0,0);s=MmxCoopGetState();
@@ -1256,7 +1256,7 @@ static void coop_cpu_companion_checks(const char *fixture) {
   check(!(s.players[1].input&SNES_PAD_B),
       "wall recovery: early landing skips the second kick");
   s.players[1].body[0x2b]&=(uint8_t)~4;
-  s.players[1].body[2]=0x10;
+  s.players[1].body[2]=0x12;
   s.players[1].input=0;
   MmxCoopSetState(&s);
   MmxCoopPoll(0,0);s=MmxCoopGetState();
@@ -1284,7 +1284,7 @@ static void coop_cpu_companion_checks(const char *fixture) {
   s.players[0].body[9]=(uint8_t)(goal_y>>8);
   s.players[0].body[0x2b]|=4;
   s.players[1].body[0x2b]&=(uint8_t)~4;
-  s.players[1].body[2]=0x10;
+  s.players[1].body[2]=0x12;
   s.players[1].input=0;
   MmxCoopSetState(&s);
   MmxCoopPoll(0,0);s=MmxCoopGetState();
@@ -1309,7 +1309,7 @@ static void coop_cpu_companion_checks(const char *fixture) {
     MmxCoopPoll(0,0);s=MmxCoopGetState();
     check(!(s.players[1].input&SNES_PAD_B),
         "tall climb: release B at measured apex without a slide delay");
-    s.players[1].body[2]=0x10;
+    s.players[1].body[2]=0x12;
     MmxCoopSetState(&s);
     MmxCoopPoll(0,0);s=MmxCoopGetState();
     check((s.players[1].input&(SNES_PAD_B|wall_dir_input))==
@@ -1319,7 +1319,7 @@ static void coop_cpu_companion_checks(const char *fixture) {
   s.players[1].body[2]=6;
   MmxCoopSetState(&s);
   MmxCoopPoll(0,0);s=MmxCoopGetState();
-  s.players[1].body[2]=0x10;
+  s.players[1].body[2]=0x12;
   MmxCoopSetState(&s);
   MmxCoopPoll(0,0);s=MmxCoopGetState();
   MmxCoopPoll(0,0);s=MmxCoopGetState();
