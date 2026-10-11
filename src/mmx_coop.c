@@ -68,6 +68,10 @@ static uint8_t cpu_stall_ticks;
 static uint8_t cpu_zero_melee_cooldown;
 static bool cpu_zero_dash_was_active;
 static bool cpu_wall_escape_reported;
+/* Once a native wall slide becomes a genuine pit emergency, keep making
+ * REAL rearmed wall jumps instead of treating the 2/8 kick budget as fatal.
+ * Host-only: native collision still controls every kick and landing. */
+static bool cpu_wall_survival_climb;
 /* Host-only route commitment for an intentional drop to an opposite wall.
  * This never changes native physics, guest memory or save-state layout. */
 static uint8_t cpu_pit_wall_ticks;
@@ -395,7 +399,7 @@ static void cpu_companion_reset_motion(void) {
   cpu_wall_recovery_phase=cpu_wall_recovery_jumps=cpu_wall_recovery_ticks=0;
   cpu_wall_recovery_left_slide=cpu_wall_buffer_pending=cpu_wall_buffer_attempted=false;
   cpu_wall_jump_hold_frames=0;cpu_wall_y_valid=false;cpu_wall_last_y=0;
-  cpu_tall_wall_climb=cpu_wall_goal_climb=false;
+  cpu_tall_wall_climb=cpu_wall_goal_climb=cpu_wall_survival_climb=false;
   cpu_tall_wall_start_y=cpu_tall_wall_best_y=0;
   cpu_tall_wall_kick_x=cpu_tall_wall_kick_y=0;
   cpu_tall_wall_trace_ticks=0;
@@ -1297,6 +1301,20 @@ static uint16_t cpu_companion_wall_recovery(const MmxCoopPlayer *f,
       getenv("MMX_CPU_WALL_ARC")!=NULL;
   if (!wall_slide && cpu_wall_recovery_jumps)
     cpu_wall_recovery_left_slide=true;
+  /* Survival is a series of genuine native wall kicks, NOT synthetic
+   * upward movement. After the normal budget, renew it only on a fresh
+   * slide after the previous kick has departed the wall. This also keeps
+   * the uint8_t jump counter from ever wrapping on a long rescue. */
+  if (cpu_wall_survival_climb && wall_slide &&
+      cpu_wall_recovery_jumps>=max_kicks &&
+      cpu_wall_recovery_left_slide) {
+    if (getenv("MMX_CPU_TRACE"))
+      fprintf(stderr,
+          "[cpu-wall-survival] reattached; renew wall-kick budget y=%u x=%u\n",
+          (unsigned)word(f->body+8),(unsigned)word(f->body+5));
+    cpu_wall_recovery_jumps=0;
+    cpu_wall_recovery_phase=MMX_CPU_WALL_SEEK;
+  }
   /* A fast wall climb must keep B through the upward motion, then have
    * B UP before contact returns. Detect the native apex from successive
    * Y samples rather than wasting 4+9 steering frames or guessing a
@@ -1595,7 +1613,7 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
     cpu_wall_recovery_phase=cpu_wall_recovery_jumps=cpu_wall_recovery_ticks=0;
     cpu_wall_recovery_left_slide=cpu_wall_buffer_pending=cpu_wall_buffer_attempted=false;
     cpu_wall_jump_hold_frames=0;
-    cpu_tall_wall_climb=cpu_wall_goal_climb=false;
+    cpu_tall_wall_climb=cpu_wall_goal_climb=cpu_wall_survival_climb=false;
   cpu_tall_wall_start_y=cpu_tall_wall_best_y=0;
     cpu_tall_wall_trace_ticks=0;
     cpu_tall_wall_kick_x=cpu_tall_wall_kick_y=0;
@@ -1670,6 +1688,37 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
     if (cpu_tall_wall_climb && y<(int)cpu_tall_wall_best_y)
       cpu_tall_wall_best_y=(uint16_t)y;
     bool near=cpu_companion_wall_jump_near(ram,x,y,cpu_wall_direction);
+    /* A slide without any verified lower floor is a pit hazard. Avoid
+     * abandoning the wall merely because ordinary recovery spent two
+     * kicks (or a planned climb spent eight). Make the LAST-RESORT choice
+     * before the normal finished-phase branch can discard another kick.
+     * Proximity alone cannot jump: the native slide state must still
+     * accept every B edge. */
+    int screen_bottom=(int)word(ram+0x1e5c)+224;
+    bool nearing_void=y>=screen_bottom-112;
+    bool spent_budget=cpu_wall_recovery_jumps>=
+        (cpu_tall_wall_climb ? 8u : 2u);
+    if (!cpu_wall_survival_climb && (wall_slide || near) &&
+        (nearing_void || spent_budget)) {
+      int shelf_dist=0;
+      bool shelf=cpu_companion_wall_escape(
+          ram,x,y,cpu_wall_direction,&shelf_dist)!=0;
+      bool lower_floor=cpu_companion_supported(ram,x,y+32) ||
+                       cpu_companion_supported(ram,x,y+56);
+      if (!shelf && !lower_floor) {
+        cpu_wall_survival_climb=true;
+        cpu_tall_wall_climb=true;
+        cpu_wall_goal_climb=true;
+        cpu_wall_recovery_phase=MMX_CPU_WALL_SEEK;
+        if (getenv("MMX_CPU_TRACE"))
+          fprintf(stderr,
+              "[cpu-wall-survival] engage x=%d y=%d wall=%d slide=%d "
+              "near_bottom=%d spent=%d kicks=%u\n",
+              x,y,(int)cpu_wall_direction,(int)wall_slide,
+              (int)nearing_void,(int)spent_budget,
+              (unsigned)cpu_wall_recovery_jumps);
+      }
+    }
     bool upper_lip=cpu_wall_goal_climb &&
         (leader->body[0x2b]&4) &&
         abs((int)word(leader->body+8)-y)<=48 &&
