@@ -2071,13 +2071,25 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
           threat.distance>=retreat_threshold;
       uint16_t stand_input=retreat ?
           (escape>0 ? MMX_CPU_RIGHT : MMX_CPU_LEFT) : 0;
-      /* Native X firing uses edge taps; Zero's existing combat routine
-       * controls its own full miniboss charge and saber strikes. */
-      if (follower->character==MMX_COOP_X &&
-          ram[0xb9c]%12==0 &&
-          cpu_companion_enemy_ahead(
-              ram,x,y,(follower->body[0x69]&64)?1:-1))
-        stand_input|=MMX_CPU_FIRE;
+      /* Give CPU X a single cautious native facing step when outside
+       * the miniboss's collision danger zone. Otherwise X can remain
+       * safely stopped but fire forever in the wrong direction. */
+      if (follower->character==MMX_COOP_X) {
+        int facing=(follower->body[0x69]&64)?1:-1;
+        if (!retreat && threat.distance>=retreat_threshold &&
+            facing!=threat.direction &&
+            cpu_companion_supported(
+                ram,x+threat.direction*16,y+16) &&
+            cpu_companion_supported(
+                ram,x+threat.direction*28,y+16) &&
+            !cpu_companion_early_missing_ground(
+                ram,x,y+16,threat.direction))
+          stand_input|=threat.direction>0?MMX_CPU_RIGHT:MMX_CPU_LEFT;
+        if (ram[0xb9c]%12==0 &&
+            cpu_companion_enemy_ahead(
+                ram,x,y,(follower->body[0x69]&64)?1:-1))
+          stand_input|=MMX_CPU_FIRE;
+      }
       if (getenv("MMX_CPU_TRACE") &&
           snes_frame_counter%24==0)
         fprintf(stderr,
