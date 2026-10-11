@@ -102,6 +102,9 @@ static MmxCpuGroundCell cpu_ground_cells[128];
 static uint8_t cpu_crumble_defense_cooldown;
 /* Do not allow combat's target-facing step to undo a terrain WAIT. */
 static bool cpu_nav_must_wait;
+/* Separate host-only hold so Zero can briefly turn and fire AT a miniboss
+ * while the path planner refuses to walk/jump INTO its body. */
+static bool cpu_boss_standoff_hold;
 /* Remember the last real Highway gap crossing. Ordinary follow may reverse
  * when Zero lands beyond X, but it must NOT send him immediately back
  * across the missing road. This is host-only navigation memory. */
@@ -432,6 +435,7 @@ static void cpu_companion_reset_motion(void) {
   memset(cpu_ground_cells,0,sizeof(cpu_ground_cells));
   cpu_crumble_defense_cooldown=0;
   cpu_nav_must_wait=false;
+  cpu_boss_standoff_hold=false;
   cpu_crumble_cross_direction=0;
   cpu_crumble_cross_start_x=0;
 }
@@ -1190,7 +1194,10 @@ static bool cpu_companion_enemy_melee(const uint8_t *r,int x,int y,int dir) {
 }
 /* Prefer genuine major enemies, including tall minibosses beyond the
  * regular 40px-high target band. Avoid arbitrary decorative objects. */
-typedef struct { bool found,boss; int direction,distance; } MmxCpuTarget;
+typedef struct {
+  bool found,boss;
+  int direction,distance,signed_dx,signed_dy;
+} MmxCpuTarget;
 static MmxCpuTarget cpu_companion_attack_target(const uint8_t *r,int x,int y) {
   MmxCpuTarget pick={0};
   if (!r) return pick;
@@ -1202,13 +1209,17 @@ static MmxCpuTarget cpu_companion_attack_target(const uint8_t *r,int x,int y) {
     bool major=MmxWidePolicy_IsBossEncounter((uint8_t)kind) ||
         kind==0x26 || kind==0x67 || kind==0x69 || kind==0x01;
     bool wide=major;
-    if (abs(dx)<10 || abs(dx)>(wide?220:152) ||
+    /* A miniboss must remain visible as a threat even when the CPU
+     * overlaps its center. Previously abs(dx)<10 made it disappear from
+     * targeting exactly when Zero was trapped INSIDE the enemy. */
+    if ((!major && abs(dx)<10) || abs(dx)>(wide?220:152) ||
         abs(dy)>(wide?112:40)) continue;
     int score=abs(dx)+abs(dy)/2-(major?240:0);
     if (score>=best_score) continue;
     best_score=score;
     pick.found=true;pick.boss=wide;
-    pick.direction=dx>0?1:-1;pick.distance=abs(dx);
+    pick.direction=dx>=0?1:-1;
+    pick.distance=abs(dx);pick.signed_dx=dx;pick.signed_dy=dy;
   }
   return pick;
 }
@@ -1234,7 +1245,8 @@ static uint16_t cpu_companion_zero_combat(const uint8_t *r,
    * nearby enemy he can stand and fire instead of walking into it. */
   int facing=(f->body[0x69]&64)?1:-1;
   bool aimed=target.found && facing==target.direction;
-  bool safe_turn=target.found && !recovering && !cpu_nav_must_wait &&
+  bool safe_turn=target.found && !recovering &&
+      (!cpu_nav_must_wait || cpu_boss_standoff_hold) &&
       (f->body[0x2b]&4)!=0 &&
       !(input&(MMX_CPU_JUMP|MMX_CPU_DASH)) &&
       !cpu_pit_wall_ticks && !cpu_air_route_ticks &&
@@ -1249,7 +1261,8 @@ static uint16_t cpu_companion_zero_combat(const uint8_t *r,
       !cpu_companion_obstacle_ahead(r,x,y,target.direction);
   if (safe_turn) {
     input&=(uint16_t)~(MMX_CPU_LEFT|MMX_CPU_RIGHT);
-    if (!aimed || target.distance>(target.boss?80:65))
+    if (!aimed || (!cpu_boss_standoff_hold &&
+                   target.distance>(target.boss?80:65)))
       input|=target.direction>0?MMX_CPU_RIGHT:MMX_CPU_LEFT;
     dir=target.direction;
   }
@@ -1599,6 +1612,7 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
     return 0;
   }
   cpu_nav_must_wait=false;
+  cpu_boss_standoff_hold=false;
   int dx=(int)word(leader->body+5)-(int)word(follower->body+5);
   int x=(int)word(follower->body+5),y=(int)word(follower->body+8);
   bool grounded=(follower->body[0x2b]&4)!=0;
@@ -2003,6 +2017,80 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
           (unsigned)cpu_wall_recovery_jumps,
           (int)cpu_tall_wall_climb,(int)upper_lip);
     return wall_input;
+  }
+  /* A miniboss is NOT terrain. The old "obstacle or stall -> JUMP"
+   * rule made the follower jump into a large enemy repeatedly with no
+   * landing target (edge=0, landing_dist=0). Prioritize safe spacing for
+   * BOTH CPU Zero and CPU X before the remaining ground-jump controller.
+   * The X3 buster still charges/fires via its existing postprocessor.
+   *
+   * Only override when on confirmed ground and NO committed air/wall
+   * traversal is in progress. Avoid changing any successful climbing. */
+  if (grounded && cpu_wall_recovery_phase==MMX_CPU_WALL_IDLE &&
+      !cpu_air_route_ticks && !cpu_pit_wall_ticks &&
+      cpu_companion_supported(ram,x,y+16)) {
+    MmxCpuTarget threat=cpu_companion_attack_target(ram,x,y);
+    if (threat.found && threat.boss && abs(threat.signed_dy)<=72 &&
+        threat.distance<=144) {
+      bool modern_saber=follower->character==MMX_COOP_ZERO &&
+          follower->zero.modern.enabled;
+      int stand_distance=modern_saber ? 52 : 112;
+      int retreat_threshold=modern_saber ? 28 : 92;
+      int escape=-threat.direction;
+      if (threat.distance<12) {
+        /* When directly inside a giant hitbox, probe BOTH exits; don't
+         * assume the enemy's ambiguous center direction is useful. */
+        bool left_safe=cpu_companion_supported(ram,x-24,y+16) &&
+            cpu_companion_supported(ram,x-44,y+16) &&
+            !cpu_companion_early_missing_ground(ram,x,y+16,-1);
+        bool right_safe=cpu_companion_supported(ram,x+24,y+16) &&
+            cpu_companion_supported(ram,x+44,y+16) &&
+            !cpu_companion_early_missing_ground(ram,x,y+16,1);
+        if ((escape==-1 && !left_safe && right_safe) ||
+            (escape==1 && !right_safe && left_safe))
+          escape=-escape;
+      }
+      bool retreat=threat.distance<retreat_threshold &&
+          cpu_companion_supported(ram,x+escape*16,y+16) &&
+          cpu_companion_supported(ram,x+escape*32,y+16) &&
+          cpu_companion_supported(ram,x+escape*48,y+16) &&
+          !cpu_companion_early_missing_ground(
+              ram,x,y+16,escape) &&
+          !cpu_companion_recent_road_loss_near(
+              x+escape*40,y+16,48) &&
+          !cpu_companion_obstacle_ahead(ram,x,y,escape);
+      /* Never carry the previous blocked-jump B latch into the miniboss
+       * again after native landing. Native B can be used once the CPU
+       * leaves this encounter and regular navigation resumes. */
+      cpu_jump_hold_frames=cpu_cliff_dash_frames=0;
+      cpu_jump_seen_airborne=false;
+      cpu_stall_ticks=0;
+      if (cpu_jump_cooldown_frames<24) cpu_jump_cooldown_frames=24;
+      cpu_nav_must_wait=true;
+      cpu_boss_standoff_hold=!retreat &&
+          threat.distance>=retreat_threshold;
+      uint16_t stand_input=retreat ?
+          (escape>0 ? MMX_CPU_RIGHT : MMX_CPU_LEFT) : 0;
+      /* Native X firing uses edge taps; Zero's existing combat routine
+       * controls its own full miniboss charge and saber strikes. */
+      if (follower->character==MMX_COOP_X &&
+          ram[0xb9c]%12==0 &&
+          cpu_companion_enemy_ahead(
+              ram,x,y,(follower->body[0x69]&64)?1:-1))
+        stand_input|=MMX_CPU_FIRE;
+      if (getenv("MMX_CPU_TRACE") &&
+          snes_frame_counter%24==0)
+        fprintf(stderr,
+            "[cpu-boss-space] %s x=%d y=%d hp=%u dist=%d "
+            "enemy_dx=%d enemy_dy=%d stand=%d retreat=%d "
+            "escape=%d pad=%c\n",
+            follower->character==MMX_COOP_ZERO?"Zero":"X",
+            x,y,(unsigned)(follower->body[0x27]&127),
+            threat.distance,threat.signed_dx,threat.signed_dy,
+            stand_distance,(int)retreat,escape,
+            retreat?(escape>0?'R':'L'):'-');
+      return stand_input;
+    }
   }
   /* Preserve takeoff direction and hold B long enough for a useful ascent,
    * even if P1 changes direction while the CPU is already jumping. */
