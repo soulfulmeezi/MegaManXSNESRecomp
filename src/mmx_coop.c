@@ -95,6 +95,8 @@ static MmxCpuGroundCell cpu_ground_cells[128];
 /* One defensive takeoff per approach to a suspected Highway collapse.
  * Not serialized, and kept separate from the known-good wall recovery. */
 static uint8_t cpu_crumble_defense_cooldown;
+/* Do not allow combat's target-facing step to undo a terrain WAIT. */
+static bool cpu_nav_must_wait;
 /* Remember the last real Highway gap crossing. Ordinary follow may reverse
  * when Zero lands beyond X, but it must NOT send him immediately back
  * across the missing road. This is host-only navigation memory. */
@@ -421,6 +423,7 @@ static void cpu_companion_reset_motion(void) {
   cpu_air_route_was_airborne=false;
   memset(cpu_ground_cells,0,sizeof(cpu_ground_cells));
   cpu_crumble_defense_cooldown=0;
+  cpu_nav_must_wait=false;
   cpu_crumble_cross_direction=0;
   cpu_crumble_cross_start_x=0;
 }
@@ -932,6 +935,79 @@ static bool cpu_companion_lower_landing(const uint8_t *ram,
  * Demand open terrain through the gap and an exposed, continuous wall
  * face within an ordinary jump/dash approach range. The leader must separately
  * be standing beyond this wall. This is not a guaranteed safe trajectory. */
+/* Pickup routing for either CPU-controlled character (X or Zero).
+ * Native item slots use kind 2 for health; collection still happens through
+ * the existing guest collision hook. This NEVER teleports health or players.
+ * Tier 1: walk only over uninterrupted supported ground.
+ * Tier 2: allow a short verified lower shelf, never an unverified leap.
+ * If no route is safe, leave the item for the human to collect. */
+typedef struct {
+  int x,y,dir;
+  uint8_t mode; /* 0=no target, 1=same tier, 2=verified lower shelf */
+} MmxCpuHealthGoal;
+static MmxCpuHealthGoal cpu_companion_health_goal(
+    const uint8_t *ram,int x,int y,int hp,int max_hp,
+    int leader_x,int leader_y,bool crumble_enabled) {
+  MmxCpuHealthGoal best={0};
+  if (!ram || hp<=0 || max_hp<=0 || hp*2>max_hp ||
+      !cpu_companion_supported(ram,x,y+16)) return best;
+  int best_score=9999;
+  for (unsigned slot=0;slot<16;++slot) {
+    unsigned d=0x1628u+slot*48u;
+    if (!ram[d] || !ram[d+1] || ram[d+10]!=2 ||
+        state.pickup_owner[slot]) continue;
+    int tx=(int)word(ram+d+5),ty=(int)word(ram+d+8);
+    int delta=tx-x,dir=delta>0?1:-1;
+    int dist=abs(delta),dy=ty-y;
+    /* Human is already at this pickup: no need to chase them into a pit. */
+    if (abs(tx-leader_x)<=24 && abs(ty-leader_y)<=28) continue;
+    if (dist<16 || dist>112 || dy< -24 || dy>88) continue;
+    bool same_tier=abs(dy)<=26;
+    bool route=false;
+    if (same_tier) {
+      route=true;
+      for (int step=8;step<=dist+8;step+=8) {
+        int sx=x+dir*(step>dist?dist:step);
+        unsigned tile=MmxWeaponsTerrainClass(ram,sx,y+18);
+        if (!cpu_companion_walkable(tile) ||
+            !MmxWeaponsTerrainSolid(ram,sx,y+18,true,NULL) ||
+            !cpu_companion_supported(ram,sx,y+16) ||
+            MmxWeaponsTerrainSolid(ram,sx,y-20,false,NULL) ||
+            (crumble_enabled &&
+             (tile==0x34 || tile==0x35 ||
+              cpu_companion_recent_road_loss_near(sx,y+16,40)))) {
+          route=false;break;
+        }
+      }
+    } else if (dy>=24 && dy<=88 && dist>=32 && dist<=96) {
+      int landing_dist=0,drop=0;
+      /* Reuse the existing ground-verified lower landing planner. It must
+       * put Zero/X on the pickup's shelf, not another distant platform. */
+      route=cpu_companion_lower_landing(ram,x,y+16,dir,ty+16,
+                                       &landing_dist,&drop) &&
+            landing_dist<=72 && drop>=20 && drop<=72 &&
+            abs((x+dir*landing_dist)-tx)<=36 &&
+            !cpu_companion_recent_road_loss_near(
+                x+dir*landing_dist,y+16+drop,40);
+      if (route && crumble_enabled) {
+        unsigned here=MmxWeaponsTerrainClass(ram,x,y+18);
+        unsigned there=MmxWeaponsTerrainClass(
+            ram,x+dir*landing_dist,y+16+drop+2);
+        if (here==0x34 || here==0x35 ||
+            there==0x34 || there==0x35) route=false;
+      }
+    }
+    if (!route) continue;
+    int score=dist+abs(dy);
+    if (score<best_score) {
+      best_score=score;
+      best.x=tx;best.y=ty;best.dir=dir;
+      best.mode=(uint8_t)(same_tier?1:2);
+    }
+  }
+  return best;
+}
+
 static bool cpu_companion_opposite_pit_wall(
     const uint8_t *ram,int x,int feet,int dir,
     int *distance_out,int *depth_out) {
@@ -1150,7 +1226,7 @@ static uint16_t cpu_companion_zero_combat(const uint8_t *r,
    * nearby enemy he can stand and fire instead of walking into it. */
   int facing=(f->body[0x69]&64)?1:-1;
   bool aimed=target.found && facing==target.direction;
-  bool safe_turn=target.found && !recovering &&
+  bool safe_turn=target.found && !recovering && !cpu_nav_must_wait &&
       (f->body[0x2b]&4)!=0 &&
       !(input&(MMX_CPU_JUMP|MMX_CPU_DASH)) &&
       !cpu_pit_wall_ticks && !cpu_air_route_ticks &&
@@ -1159,6 +1235,9 @@ static uint16_t cpu_companion_zero_combat(const uint8_t *r,
       /* Combat steering must not override the ordinary pit WAIT rule.
        * Use the same 28px lookahead as the terrain edge sensor. */
       cpu_companion_supported(r,x+target.direction*28,y+16) &&
+      !cpu_companion_early_missing_ground(r,x,y+16,target.direction) &&
+      !cpu_companion_recent_road_loss_near(
+          x+target.direction*40,y+16,48) &&
       !cpu_companion_obstacle_ahead(r,x,y,target.direction);
   if (safe_turn) {
     input&=(uint16_t)~(MMX_CPU_LEFT|MMX_CPU_RIGHT);
@@ -1506,6 +1585,7 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
     cpu_companion_reset_motion();
     return 0;
   }
+  cpu_nav_must_wait=false;
   int dx=(int)word(leader->body+5)-(int)word(follower->body+5);
   int x=(int)word(follower->body+5),y=(int)word(follower->body+8);
   bool grounded=(follower->body[0x2b]&4)!=0;
@@ -1547,6 +1627,29 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
    * native jump gets its own direction while airborne. */
   int direction=MmxCoopCpuAirRouteDirection(
       dx,cpu_air_route_ticks ? cpu_air_route_dir : 0,!grounded);
+  /* Only the CPU seeks HEALTH when seriously hurt; it never copies
+   * the human's descent or pursues an unverified lower platform. */
+  MmxCpuHealthGoal health={0};
+  if (grounded && !cpu_air_route_ticks && !cpu_pit_wall_ticks &&
+      !cpu_jump_hold_frames &&
+      cpu_wall_recovery_phase==MMX_CPU_WALL_IDLE) {
+    health=cpu_companion_health_goal(
+        ram,x,y,(int)(follower->body[0x27]&127),
+        (int)ram[0x1f9a],
+        (int)word(leader->body+5),(int)word(leader->body+8),
+        crumble_enabled);
+    if (health.mode) {
+      direction=health.dir;
+      if (getenv("MMX_CPU_TRACE") && snes_frame_counter%90==0)
+        fprintf(stderr,
+            "[cpu-health] %s seek kind=2 x=%d y=%d target_x=%d "
+            "target_y=%d hp=%u max=%u mode=%u dir=%d\n",
+            follower->character==MMX_COOP_ZERO?"Zero":"X",
+            x,y,health.x,health.y,
+            (unsigned)(follower->body[0x27]&127),
+            (unsigned)ram[0x1f9a],(unsigned)health.mode,direction);
+    }
+  }
   /* Horizontal follow reaches its dead zone even when P1 is standing on
    * a high platform. Search BOTH sides for an actual close wall before
    * choosing a route: this is not a reaction to P1's B/jump input.
@@ -1937,6 +2040,7 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
             "reverse=%d last_cross=%d start_x=%u gap=%d lost=%d\n",
             x,feet,dx,direction,(int)cpu_crumble_cross_direction,
             (unsigned)cpu_crumble_cross_start_x,hole,(int)recent_loss);
+      cpu_nav_must_wait=true;
       return input&(uint16_t)~(MMX_CPU_LEFT|MMX_CPU_RIGHT|
                                 MMX_CPU_JUMP|MMX_CPU_DASH);
     }
@@ -2020,13 +2124,24 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
   /* When X is already standing on a lower tier, a verified downward
    * landing may be more useful than a blind horizontal jump or WAIT. */
   int drop_distance=0,drop_depth=0;
-  bool lower_goal=edge && (leader->body[0x2b]&4)!=0 &&
+  bool human_lower_goal=edge && (leader->body[0x2b]&4)!=0 &&
       dx*direction>40 &&
       (int)word(leader->body+8)-y>=20 &&
       (int)word(leader->body+8)-y<=112;
+  bool health_lower_goal=edge && health.mode==2;
+  bool lower_goal=human_lower_goal || health_lower_goal;
   bool lower_landing=lower_goal && cpu_companion_lower_landing(
-      ram,x,feet,direction,(int)word(leader->body+8)+16,
+      ram,x,feet,direction,
+      health_lower_goal ? health.y+16 : (int)word(leader->body+8)+16,
       &drop_distance,&drop_depth);
+  if (health_lower_goal) {
+    lower_landing=lower_landing && drop_distance<=72 &&
+        drop_depth<=72 &&
+        abs(x+direction*drop_distance-health.x)<=36 &&
+        !cpu_companion_recent_road_loss_near(
+            x+direction*drop_distance,feet+drop_depth,40);
+    if (!lower_landing) short_landing=false; /* Never jump for an unsafe pickup. */
+  }
   bool safe_drop=lower_landing && drop_distance<=72;
   /* Farther lower ledges call for a normal jump (and perhaps dash),
    * so the CPU has the lateral flight time to reach the floor. */
@@ -2040,7 +2155,8 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
    * after the cliff sensor fires. Once within ~48px, proactively jump at
    * the wall. At a lip, allow a longer native dash-jump approach if the
    * wall's top has a valid, walkable landing. */
-  bool high_goal=elevated_goal && (dx*direction>40 || climb_from_below);
+  bool high_goal=!health.mode && elevated_goal &&
+      (dx*direction>40 || climb_from_below);
   /* Only scan high columns when the CPU is near a gap, touching a
    * possible obstacle or has a higher destination ahead. A full-height
    * scan every ordinary walking frame needlessly burns CPU. */
@@ -2167,8 +2283,10 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
   MmxCpuMoveDecision move=MmxCoopCpuChooseMove(
       edge,short_landing,(raised_wall || goal_wall),climb_takeoff,
       safe_drop,obstacle || blocked);
-  if (move==MMX_CPU_MOVE_WAIT)
+  if (move==MMX_CPU_MOVE_WAIT) {
+    cpu_nav_must_wait=true;
     return input&(uint16_t)~(MMX_CPU_LEFT|MMX_CPU_RIGHT|MMX_CPU_JUMP|MMX_CPU_DASH);
+  }
   /* A short safe DROP is deliberately NOT a jump: keep moving toward
    * the floor X is standing on, and let the native fall/land logic run. */
   if (move==MMX_CPU_MOVE_WALK || move==MMX_CPU_MOVE_DROP) return input;
