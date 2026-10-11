@@ -92,6 +92,9 @@ typedef struct {
   uint32_t lost_frame;
 } MmxCpuGroundCell;
 static MmxCpuGroundCell cpu_ground_cells[128];
+/* One defensive takeoff per approach to a suspected Highway collapse.
+ * Not serialized, and kept separate from the known-good wall recovery. */
+static uint8_t cpu_crumble_defense_cooldown;
 static uint16_t cpu_last_x;
 static int8_t cpu_jump_direction, cpu_wall_direction, cpu_stall_direction;
 static unsigned starting_character;
@@ -412,6 +415,7 @@ static void cpu_companion_reset_motion(void) {
   cpu_air_route_ticks=0;cpu_air_route_dir=0;
   cpu_air_route_was_airborne=false;
   memset(cpu_ground_cells,0,sizeof(cpu_ground_cells));
+  cpu_crumble_defense_cooldown=0;
 }
 void MmxCoopReset(void) {
   cpu_companion_reset_motion();cpu_human_seat=cpu_swap_trigger_down=cpu_rescue_cooldown=0;
@@ -755,6 +759,21 @@ static bool cpu_companion_recent_road_loss(int x,int feet,int dir) {
   }
   return false;
 }
+/* A landing adjacent to recently DISAPPEARED collision cells is not
+ * trustworthy just because a different tile still reports support. On
+ * the Highway whole road segments fall in a staggered chain: this avoids
+ * trusting the next cell of a bridge already disappearing. */
+static bool cpu_companion_recent_road_loss_near(int x,int feet,int radius) {
+  for (unsigned i=0;i<sizeof(cpu_ground_cells)/sizeof(cpu_ground_cells[0]);++i) {
+    const MmxCpuGroundCell *cell=&cpu_ground_cells[i];
+    if (cell->valid && cell->lost &&
+        (uint32_t)snes_frame_counter-cell->lost_frame<=150u &&
+        abs((int)cell->x-x)<=radius &&
+        abs((int)cell->y-feet)<=32)
+      return true;
+  }
+  return false;
+}
 static int cpu_companion_early_missing_ground(
     const uint8_t *ram,int x,int feet,int dir) {
   if (!ram || !dir) return 0;
@@ -777,6 +796,7 @@ static bool cpu_companion_crumble_route(const uint8_t *ram,int x,int feet,
   for(int d=first_gap+24;d<=176;d+=8) {
     int sx=x+dir*d;
     if (!cpu_companion_landing(ram,sx,feet) ||
+        cpu_companion_recent_road_loss_near(sx,feet,48) ||
         !cpu_companion_supported(ram,sx+dir*16,feet) ||
         MmxWeaponsTerrainSolid(ram,sx,feet-28,false,NULL) ||
         MmxWeaponsTerrainSolid(ram,sx,feet-44,false,NULL)) continue;
@@ -1482,6 +1502,7 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
   int dx=(int)word(leader->body+5)-(int)word(follower->body+5);
   int x=(int)word(follower->body+5),y=(int)word(follower->body+8);
   bool grounded=(follower->body[0x2b]&4)!=0;
+  if (cpu_crumble_defense_cooldown) --cpu_crumble_defense_cooldown;
   /* X can trigger a collapse while Zero is far away or in the air.
    * Sample live collision around BOTH players each AI frame. */
   bool crumble_enabled=getenv("MMX_CPU_CRUMBLE")!=NULL &&
@@ -1854,6 +1875,40 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
   }
   /* Pit approaches use the standard held native jump immediately below.
    * Do not override that hold with a walk-off-only return on the lip. */
+  /* Shared-road emergency: in the intro Highway, X can trigger an entire
+   * 0x34/0x35 collision strip to fall while Zero is in the 40px follow
+   * deadzone. Ordinary gap detection never runs when direction==0, so
+   * Zero silently loses the floor. If X is arriving from the left and
+   * starting to cross/jump on the SAME raised road, take a cautious
+   * vertical native jump while the floor still supports Zero.
+   * This is deliberately stage-scoped and has a cooldown: it must not
+   * cause constant hopping or alter native wall kicks elsewhere. */
+  if (crumble_enabled && grounded && !cpu_crumble_defense_cooldown &&
+      !cpu_jump_cooldown_frames && !cpu_pit_wall_ticks &&
+      cpu_wall_recovery_phase==MMX_CPU_WALL_IDLE &&
+      dx<=0 && dx>=-64 &&
+      abs((int)word(leader->body+8)-y)<=72 &&
+      ((leader->input&MMX_CPU_RIGHT)!=0 ||
+       leader->body[2]==6 || leader->body[2]==8) &&
+      cpu_companion_supported(ram,x,y+16)) {
+    unsigned surface=MmxWeaponsTerrainClass(ram,x,y+18);
+    if ((surface==0x34 || surface==0x35) &&
+        !(follower->input&MMX_CPU_JUMP) &&
+        !MmxWeaponsTerrainSolid(ram,x,y-25,false,NULL) &&
+        !MmxWeaponsTerrainSolid(ram,x,y-35,false,NULL)) {
+      cpu_crumble_defense_cooldown=120;
+      cpu_jump_cooldown_frames=48;
+      cpu_jump_hold_frames=20;
+      cpu_jump_seen_airborne=false;
+      cpu_jump_direction=0; /* gain height without chasing X into the hole */
+      if (getenv("MMX_CPU_TRACE"))
+        fprintf(stderr,
+            "[cpu-crumble-defense] X approaching fragile road; "
+            "jump in place x=%d y=%d dx=%d tile=%u\n",
+            x,y,dx,surface);
+      return MMX_CPU_JUMP;
+    }
+  }
   if (!grounded || !direction) return input;
   int feet=y+16;
   bool edge=cpu_companion_ground_missing(ram,x,feet,direction);
@@ -1911,6 +1966,20 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
   int landing_distance=0, landing_rise=0;
   bool short_landing=edge && cpu_companion_gap_reachable(
       ram,x,feet,direction,&landing_distance,&landing_rise);
+  /* The generic gap planner otherwise overrides crumble-route's stricter
+   * landing checks and can select the same collapsing bridge. Reject
+   * local landings alongside cells that already lost collision support. */
+  if (crumble_enabled && short_landing &&
+      cpu_companion_recent_road_loss_near(
+          x+direction*landing_distance,feet-landing_rise,48)) {
+    if (getenv("MMX_CPU_TRACE"))
+      fprintf(stderr,
+          "[cpu-crumble-veto] unsafe landing x=%d feet=%d dist=%d "
+          "rise=%d; recent road loss\n",
+          x,feet,landing_distance,landing_rise);
+    short_landing=false;
+    landing_distance=landing_rise=0;
+  }
   /* A positive beyond-gap landing is more relevant than a same-platform
    * cell returned by the generic scanner before the road gives way. */
   if (crumble_route) {
