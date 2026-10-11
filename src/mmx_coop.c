@@ -72,6 +72,11 @@ static bool cpu_wall_escape_reported;
  * REAL rearmed wall jumps instead of treating the 2/8 kick budget as fatal.
  * Host-only: native collision still controls every kick and landing. */
 static bool cpu_wall_survival_climb;
+/* Pit rescue steering while STILL APPROACHING a real collision wall.
+ * A native wall kick cannot start until the player contacts/slides on it. */
+static int8_t cpu_pit_seek_wall_dir;
+static uint16_t cpu_last_supported_y;
+static bool cpu_last_supported_y_valid;
 /* Host-only route commitment for an intentional drop to an opposite wall.
  * This never changes native physics, guest memory or save-state layout. */
 static uint8_t cpu_pit_wall_ticks;
@@ -417,6 +422,9 @@ static void cpu_companion_reset_motion(void) {
   cpu_stall_ticks=0;cpu_last_x=0;cpu_stall_direction=0;
   cpu_zero_melee_cooldown=0;cpu_zero_dash_was_active=false;
   cpu_wall_escape_reported=false;
+  cpu_pit_seek_wall_dir=0;
+  cpu_last_supported_y=0;
+  cpu_last_supported_y_valid=false;
   cpu_pit_wall_ticks=0;cpu_pit_wall_direction=0;
   cpu_pit_wall_was_airborne=false;
   cpu_air_route_ticks=0;cpu_air_route_dir=0;
@@ -1545,7 +1553,12 @@ static uint16_t cpu_companion_wall_recovery(const MmxCoopPlayer *f,
   if (cpu_wall_recovery_phase==MMX_CPU_WALL_PUSH) {
     /* Native wall-kick already provides a strong push-off.
      * Pressing AWAY again prevented high-wall reattachment. */
-    steer=arc_mode ? away : cpu_wall_goal_climb ? toward : away;
+    /* In a PIT emergency an outward wide-arc input can throw Zero away
+     * from the ONLY surviving wall. Native wall-kick momentum already
+     * pushes outward; actively steer back toward the sensed wall.
+     * Normal tall wall climbs retain the successful wide-arc timings. */
+    steer=cpu_wall_survival_climb ? toward :
+          arc_mode ? away : cpu_wall_goal_climb ? toward : away;
     if (cpu_wall_recovery_ticks) --cpu_wall_recovery_ticks;
     if (!cpu_wall_recovery_ticks) {
       cpu_wall_recovery_phase=MMX_CPU_WALL_RETURN;
@@ -1711,9 +1724,69 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
   if (grounded) cpu_wall_y_valid=false;
   else cpu_wall_y_valid=true;
   cpu_wall_last_y=(uint16_t)y;
+  /* Don't assume X is to our right when a wall would save us. Start
+   * steering toward a PHYSICALLY VERIFIED face while it is still 20..112
+   * pixels away, rather than waiting until the <=19px contact sensor.
+   * Only activate after falling below the last safe floor, with no lower
+   * support beneath the companion. Never replace a working wall climb. */
+  if (grounded && cpu_companion_supported(ram,x,y+16)) {
+    cpu_last_supported_y=(uint16_t)y;
+    cpu_last_supported_y_valid=true;
+    cpu_pit_seek_wall_dir=0;
+  } else if (!grounded && descending &&
+             cpu_wall_recovery_phase==MMX_CPU_WALL_IDLE) {
+    int bottom=(int)word(ram+0x1e5c)+224;
+    bool falling_into_pit=
+        (cpu_last_supported_y_valid &&
+         y>=(int)cpu_last_supported_y+24) ||
+        y>=bottom-112;
+    if (falling_into_pit &&
+        !cpu_companion_supported(ram,x,y+32) &&
+        !cpu_companion_supported(ram,x,y+56)) {
+      if (!cpu_pit_seek_wall_dir) {
+        int right=cpu_companion_wall_face(ram,x,y+16,1);
+        int left=cpu_companion_wall_face(ram,x,y+16,-1);
+        if (right>112) right=0;
+        if (left>112) left=0;
+        /* A climbable wall must continue BELOW our current height. A
+         * disappearing upper lip is not a place to save a falling CPU. */
+        if (right && !MmxWeaponsTerrainSolid(
+                ram,x+right,y+24,false,NULL)) right=0;
+        if (left && !MmxWeaponsTerrainSolid(
+                ram,x-left,y+24,false,NULL)) left=0;
+        cpu_pit_seek_wall_dir=(int8_t)(
+            right && (!left || right<=left) ? 1 : left ? -1 : 0);
+        if (cpu_pit_seek_wall_dir) {
+          /* Abandon the previous jump's stale horizontal latch: it may
+           * point BACK across a collapsed platform, away from this wall. */
+          cpu_air_route_ticks=0;cpu_air_route_dir=0;
+          cpu_air_route_was_airborne=false;
+          cpu_pit_wall_ticks=0;cpu_pit_wall_direction=0;
+          cpu_pit_wall_was_airborne=false;
+          cpu_jump_hold_frames=cpu_cliff_dash_frames=0;
+          cpu_jump_seen_airborne=false;
+          if (getenv("MMX_CPU_TRACE"))
+            fprintf(stderr,
+                "[cpu-pit-wall-seek] engage x=%d y=%d wall_dir=%d "
+                "right=%d left=%d last_ground=%u bottom=%d\n",
+                x,y,(int)cpu_pit_seek_wall_dir,
+                right,left,(unsigned)cpu_last_supported_y,bottom);
+        } else if (getenv("MMX_CPU_TRACE") &&
+                   snes_frame_counter%18==0) {
+          fprintf(stderr,
+              "[cpu-pit-wall-seek] no reachable face x=%d y=%d "
+              "last_ground=%u bottom=%d\n",
+              x,y,(unsigned)cpu_last_supported_y,bottom);
+        }
+      }
+      if (cpu_pit_seek_wall_dir)
+        direction=cpu_pit_seek_wall_dir;
+    }
+  }
   int touching_wall=!grounded &&
       (wall_slide || descending) ?
-      cpu_companion_air_wall_contact(ram,x,y,direction) : 0;
+      cpu_companion_air_wall_contact(ram,x,y,
+          cpu_pit_seek_wall_dir ? cpu_pit_seek_wall_dir : direction) : 0;
   /* Detect genuine obstruction by observing lack of horizontal progress
    * while repeatedly driving a direction. Useful for moving gates and
    * objects that are not represented in the static terrain map. */
@@ -1762,6 +1835,9 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
         fprintf(stderr,"[cpu-air-route] wall contact x=%d y=%d\n",x,y);
       cpu_air_route_ticks=0;cpu_air_route_dir=0;
       cpu_air_route_was_airborne=false;
+      /* The approaching seek has done its job; native wall state takes
+       * over now and retains its own verified collision direction. */
+      cpu_pit_seek_wall_dir=0;
       cpu_wall_direction=(int8_t)(
           touching_wall ? touching_wall :
           direction ? direction : (follower->body[0x69]&64 ? 1 : -1));
