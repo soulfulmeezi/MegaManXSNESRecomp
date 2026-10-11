@@ -95,6 +95,11 @@ static MmxCpuGroundCell cpu_ground_cells[128];
 /* One defensive takeoff per approach to a suspected Highway collapse.
  * Not serialized, and kept separate from the known-good wall recovery. */
 static uint8_t cpu_crumble_defense_cooldown;
+/* Remember the last real Highway gap crossing. Ordinary follow may reverse
+ * when Zero lands beyond X, but it must NOT send him immediately back
+ * across the missing road. This is host-only navigation memory. */
+static int8_t cpu_crumble_cross_direction;
+static uint16_t cpu_crumble_cross_start_x;
 static uint16_t cpu_last_x;
 static int8_t cpu_jump_direction, cpu_wall_direction, cpu_stall_direction;
 static unsigned starting_character;
@@ -416,6 +421,8 @@ static void cpu_companion_reset_motion(void) {
   cpu_air_route_was_airborne=false;
   memset(cpu_ground_cells,0,sizeof(cpu_ground_cells));
   cpu_crumble_defense_cooldown=0;
+  cpu_crumble_cross_direction=0;
+  cpu_crumble_cross_start_x=0;
 }
 void MmxCoopReset(void) {
   cpu_companion_reset_motion();cpu_human_seat=cpu_swap_trigger_down=cpu_rescue_cooldown=0;
@@ -1911,6 +1918,29 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
   }
   if (!grounded || !direction) return input;
   int feet=y+16;
+  /* Do not U-turn over a gap just crossed. The air-route latch correctly
+   * holds the committed takeoff direction in flight, but when Zero lands
+   * it resets; horizontal follow then chases X BACK over the same hole.
+   * Prefer waiting safely for X to catch up. This guard applies only
+   * while the opposite direction contains a live gap or recent road loss,
+   * never to a confirmed solid walkway or normal wall-climb recovery. */
+  if (crumble_enabled && cpu_crumble_cross_direction &&
+      direction==-cpu_crumble_cross_direction &&
+      (x-(int)cpu_crumble_cross_start_x)*cpu_crumble_cross_direction>=40) {
+    int hole=cpu_companion_early_missing_ground(ram,x,feet,direction);
+    bool recent_loss=cpu_companion_recent_road_loss_near(
+        x+direction*40,feet,48);
+    if (hole || recent_loss) {
+      if (getenv("MMX_CPU_TRACE") && snes_frame_counter%30==0)
+        fprintf(stderr,
+            "[cpu-crumble-backtrack] HOLD x=%d feet=%d X_dx=%d "
+            "reverse=%d last_cross=%d start_x=%u gap=%d lost=%d\n",
+            x,feet,dx,direction,(int)cpu_crumble_cross_direction,
+            (unsigned)cpu_crumble_cross_start_x,hole,(int)recent_loss);
+      return input&(uint16_t)~(MMX_CPU_LEFT|MMX_CPU_RIGHT|
+                                MMX_CPU_JUMP|MMX_CPU_DASH);
+    }
+  }
   bool edge=cpu_companion_ground_missing(ram,x,feet,direction);
   /* Experimental breaking-ground awareness: inspect the CURRENT map
    * near Zero and confirm a distinct landing beyond the hole. The scan
@@ -2099,6 +2129,10 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
     if (headroom && !cpu_jump_cooldown_frames) {
       cpu_air_route_ticks=0;cpu_air_route_dir=0;
       cpu_air_route_was_airborne=false;
+      if (crumble_enabled) {
+        cpu_crumble_cross_direction=(int8_t)direction;
+        cpu_crumble_cross_start_x=(uint16_t)x;
+      }
       cpu_pit_wall_ticks=MmxCoopCpuPitApproachTicks(pit_wall_distance);
       cpu_pit_wall_direction=(int8_t)direction;
       cpu_pit_wall_was_airborne=false;
@@ -2164,6 +2198,14 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
   /* An ordinary jump that starts at a verified gap or raised-wall route
    * must keep steering through the FALL, even after B/dash are released
    * and the leader passes inside the usual follow deadzone. */
+  if (crumble_enabled && edge && short_landing) {
+    cpu_crumble_cross_direction=(int8_t)direction;
+    cpu_crumble_cross_start_x=(uint16_t)x;
+    if (getenv("MMX_CPU_TRACE"))
+      fprintf(stderr,
+          "[cpu-crumble-cross] start x=%d y=%d dir=%d landing=%d\n",
+          x,y,direction,landing_distance);
+  }
   if (edge || raised_wall || goal_wall) {
     cpu_air_route_ticks=120;
     cpu_air_route_dir=(int8_t)direction;
