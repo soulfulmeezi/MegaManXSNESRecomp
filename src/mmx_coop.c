@@ -2140,7 +2140,17 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
         abs(x+direction*drop_distance-health.x)<=36 &&
         !cpu_companion_recent_road_loss_near(
             x+direction*drop_distance,feet+drop_depth,40);
-    if (!lower_landing) short_landing=false; /* Never jump for an unsafe pickup. */
+    if (!lower_landing) {
+      /* This goal is optional. Do NOT substitute a generic gap jump or a
+       * distant wall climb when the health shelf is unsafe/inaccessible. */
+      cpu_nav_must_wait=true;
+      if (getenv("MMX_CPU_TRACE") && snes_frame_counter%60==0)
+        fprintf(stderr,
+            "[cpu-health] lower pickup route blocked x=%d y=%d target=%d,%d\n",
+            x,y,health.x,health.y);
+      return input&(uint16_t)~(MMX_CPU_LEFT|MMX_CPU_RIGHT|
+                                MMX_CPU_JUMP|MMX_CPU_DASH);
+    }
   }
   bool safe_drop=lower_landing && drop_distance<=72;
   /* Farther lower ledges call for a normal jump (and perhaps dash),
