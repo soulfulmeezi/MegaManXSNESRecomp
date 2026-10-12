@@ -128,6 +128,10 @@ add_mmx_variant(RockmanXSNESRecomp "${CMAKE_CURRENT_SOURCE_DIR}/variants/jp/gen"
 
 include(CTest)
 if(BUILD_TESTING)
+    # ROM-free unit coverage for the CPU companion's no-progress jump memory.
+    add_executable(mmx_cpu_antistuck_test tests/mmx_cpu_antistuck_test.c)
+    target_include_directories(mmx_cpu_antistuck_test PRIVATE src)
+    add_test(NAME mmx_cpu_antistuck COMMAND mmx_cpu_antistuck_test)
     add_executable(mmx_source_assets_test tests/mmx_source_assets_test.cpp src/mmx_source_assets.cpp
         ${SNESRECOMP_ROOT}/runner/src/sha256.c "${CMAKE_CURRENT_BINARY_DIR}/mmx_weapon_sources.h")
     target_include_directories(mmx_source_assets_test PRIVATE src ${CMAKE_CURRENT_BINARY_DIR} ${SNESRECOMP_ROOT}/runner/src)
@@ -150,7 +154,7 @@ if(BUILD_TESTING)
     add_test(NAME mmx_custom_renderer COMMAND mmx_renderer_test)
     add_executable(mmx_render_capture tools/mmx_render_capture.c src/mmx_renderer.c src/mmx_render_assets.c src/mmx_display.c src/mmx_wide_policy.c src/mmx_zero.c src/mmx_weapons.c src/mmx_weapon_combat.c src/mmx_coop_view.c)
     target_include_directories(mmx_render_capture PRIVATE src ${SNESRECOMP_ROOT}/runner/src)
-    foreach(mmx_test mmx_display_test mmx_wide_policy_test mmx_renderer_test mmx_password_save_test mmx_zero_test)
+    foreach(mmx_test mmx_display_test mmx_wide_policy_test mmx_renderer_test mmx_password_save_test mmx_zero_test mmx_cpu_antistuck_test)
         if(MSVC)
             target_compile_options(${mmx_test} PRIVATE /UNDEBUG)
         else()
