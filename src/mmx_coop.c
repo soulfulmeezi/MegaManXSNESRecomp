@@ -1,4 +1,5 @@
 #include "mmx_coop.h"
+#include "mmx_cpu_antistuck.h"
 #include "mmx_coop_view.h"
 #include "mmx_renderer.h"
 #include "mmx_coop_trace.h"
@@ -65,6 +66,8 @@ static uint16_t cpu_wall_last_y;
 static uint8_t cpu_human_seat, cpu_swap_trigger_down, cpu_rescue_cooldown;
 static bool cpu_l2_trigger_held;
 static uint8_t cpu_stall_ticks;
+/* Throttle grounded no-progress obstacle jumps; deliberate routes bypass. */
+static MmxCpuAntiStuckState cpu_antistuck;
 static uint8_t cpu_zero_melee_cooldown;
 static bool cpu_zero_dash_was_active;
 static bool cpu_wall_escape_reported;
@@ -423,6 +426,7 @@ static void cpu_companion_reset_motion(void) {
   cpu_tall_wall_trace_ticks=0;
   cpu_jump_direction=cpu_wall_direction=0;
   cpu_stall_ticks=0;cpu_last_x=0;cpu_stall_direction=0;
+  memset(&cpu_antistuck,0,sizeof(cpu_antistuck));
   cpu_zero_melee_cooldown=0;cpu_zero_dash_was_active=false;
   cpu_wall_escape_reported=false;
   cpu_pit_seek_wall_dir=0;
@@ -1616,6 +1620,7 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
   int dx=(int)word(leader->body+5)-(int)word(follower->body+5);
   int x=(int)word(follower->body+5),y=(int)word(follower->body+8);
   bool grounded=(follower->body[0x2b]&4)!=0;
+  MmxCpuAntiStuckTick(&cpu_antistuck,grounded,x,y);
   if (cpu_crumble_defense_cooldown) --cpu_crumble_defense_cooldown;
   /* X can trigger a collapse while Zero is far away or in the air.
    * Sample live collision around BOTH players each AI frame. */
@@ -2487,6 +2492,23 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
   if (!headroom || (cpu_jump_cooldown_frames && !crumble_route)) {
     if (edge) input&=(uint16_t)~(MMX_CPU_LEFT|MMX_CPU_RIGHT);
     return input;
+  }
+  /* The only jump class eligible for anti-stuck throttling is the
+   * generic obstacle/stall hop on otherwise supported ground. A special
+   * wall climb, collapsing-road crossing or verified landing never waits
+   * on this memory, preserving the already proven native parkour. */
+  if (move==MMX_CPU_MOVE_JUMP && !edge && !raised_wall && !goal_wall &&
+      !crumble_route &&
+      !MmxCpuAntiStuckTryHop(&cpu_antistuck,x,y)) {
+    cpu_nav_must_wait=true; /* Combat must not sneak a step into a hazard. */
+    if (getenv("MMX_CPU_TRACE") && cpu_antistuck.wait_ticks==150)
+      fprintf(stderr,
+          "[cpu-anti-stuck] repeating ordinary hop at x=%d y=%d "
+          "dir=%d attempts=%u; hold=%u ticks; seek verified route\n",
+          x,y,direction,(unsigned)cpu_antistuck.attempts,
+          (unsigned)cpu_antistuck.wait_ticks);
+    return input&(uint16_t)~(MMX_CPU_LEFT|MMX_CPU_RIGHT|
+                              MMX_CPU_JUMP|MMX_CPU_DASH);
   }
   if (crumble_route && getenv("MMX_CPU_TRACE"))
     fprintf(stderr,
