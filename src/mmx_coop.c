@@ -4377,7 +4377,15 @@ static void constrain_player(uint8_t *r) {
   const MmxCoopPlayer *other=&state.players[state.current^1];
   int x=word(r+0xbad),ox=word(other->body+5);
   int limited=MmxCpuSafeFollowClamp(x,ox,cpu_safe_follow_active());
-  if (limited!=x) {putword(r+0xbad,(unsigned)limited);r[0xbac]=0;putword(r+0xbc2,0);}
+  if (limited!=x) {
+    if (cpu_safe_follow_active() && getenv("MMX_CPU_TRACE") &&
+        snes_frame_counter%45==0)
+      fprintf(stderr,
+          "[cpu-follow-limit] seat=%s x=%d other=%d capped=%d max=288\n",
+          state.current==cpu_human_seat?"human":"companion",
+          x,ox,limited);
+    putword(r+0xbad,(unsigned)limited);r[0xbac]=0;putword(r+0xbc2,0);
+  }
 }
 static void camera_hook(CpuState *cpu,uint32_t pc) {
   MmxCoopLiftCarry(g_ram);
