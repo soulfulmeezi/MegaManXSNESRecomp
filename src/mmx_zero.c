@@ -1,4 +1,5 @@
 #include "mmx_zero.h"
+#include "mmx_future_zero_color.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -142,6 +143,22 @@ bool MmxZeroLoad(const char *path) {
   memcpy(hud_tiles, hud, sizeof(hud_tiles));
   for (unsigned i = 0; i < 16; ++i) hud_colors[i] = (uint16_t)(word(hud + 128 + 2 * i) & 0x7fff);
   for (unsigned i = 0; i < 128; ++i) colors[i] = (uint16_t)(word(palette + 2 * i) & 0x7fff);
+  /* Host-side Future Zero variant: remap his saturated red armor ramp
+   * to vivid yellow/gold and charcoal. Do not change the ROM, sprites,
+   * skin, golden hair, neutral outlines, charge particles or X's art.
+   * Opt out with MMX_ZERO_CLASSIC_RED=1 for side-by-side comparisons. */
+  if (!getenv("MMX_ZERO_CLASSIC_RED")) {
+    for (unsigned i=16;i<128;++i)
+      if (i<32 || i>=48) colors[i]=MmxFutureZeroYellowBlack(colors[i]);
+    for (unsigned i=0;i<16;++i)
+      hud_colors[i]=MmxFutureZeroYellowBlack(hud_colors[i]);
+    /* X3's native charged palette temporarily flashes blue, purple and
+     * green. Keep those highlights elsewhere, but pin actual red-armor
+     * indices to the yellow-black body palette so the suit stays colored. */
+    for (unsigned i=0;i<16 && modern;++i)
+      if (MmxFutureZeroIsRedArmor((uint16_t)(word(palette+2*(16+i))&0x7fff)))
+        for (unsigned k=0;k<3;++k) charge_colors[k][i]=colors[16+i];
+  }
   return true;
 }
 const uint16_t *MmxZeroColors(void) { return colors; }
