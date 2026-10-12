@@ -1005,6 +1005,44 @@ static bool cpu_companion_deep_lower_landing(
       return true;
     }
   }
+  /* If there is no direct 128..256px landing near X, take an
+   * intermediate ledge 56..112px below as a FIRST stage instead.
+   * Each step must be genuinely closer to X, with open vertical air and
+   * verified stable support. Replanning only occurs after native landing.
+   * This never turns an unverified deep pit into an approved route. */
+  for (int d=40;d<=104;d+=8) {
+    int sx=x+dir*d;
+    bool closer=abs(leader_x-sx)<=abs(leader_x-x)-16;
+    if (!closer) continue;
+    for (int depth=56;depth<=112;depth+=8) {
+      int sample=feet+depth,surface=0;
+      unsigned tile=MmxWeaponsTerrainClass(ram,sx,sample);
+      if (!cpu_companion_walkable(tile) ||
+          !MmxWeaponsTerrainSolid(ram,sx,sample,true,&surface))
+        continue;
+      bool landing_safe=
+          cpu_companion_supported(ram,sx-dir*12,surface+2) &&
+          cpu_companion_supported(ram,sx+dir*12,surface+2) &&
+          !MmxWeaponsTerrainSolid(ram,sx,surface-20,false,NULL) &&
+          !MmxWeaponsTerrainSolid(ram,sx,surface-36,false,NULL) &&
+          !cpu_companion_recent_road_loss_near(sx,surface,36);
+      if (!MmxCpuIntermediateDropAllowed(
+              true,true,landing_safe,true,surface<=visible_bottom-12,
+              surface-feet,d,leader_feet-surface,closer))
+        continue;
+      bool shaft_clear=true;
+      for (int fy=feet+24;fy<surface-28;fy+=12) {
+        if (MmxWeaponsTerrainSolid(ram,sx,fy,false,NULL) ||
+            MmxWeaponsTerrainSolid(ram,x+dir*32,fy,false,NULL)) {
+          shaft_clear=false;break;
+        }
+      }
+      if (!shaft_clear) continue;
+      if (target_x_out) *target_x_out=sx;
+      if (target_feet_out) *target_feet_out=surface;
+      return true;
+    }
+  }
   return false;
 }
 
