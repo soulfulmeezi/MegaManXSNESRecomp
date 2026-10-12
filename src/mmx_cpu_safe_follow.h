@@ -28,3 +28,16 @@ static inline uint16_t MmxCpuSafeFollowJumpPad(
     int direction,uint16_t left,uint16_t right,uint16_t jump) {
   return (uint16_t)(jump | (direction>0?right:direction<0?left:0));
 }
+
+/* Only defer an optional crossing while the human is airborne when
+ * the CPU is STABLY supported. Fragile road, recently lost support and
+ * committed traversal are emergencies: they must remain handled by the
+ * native path planner rather than forced WAIT. */
+static inline bool MmxCpuSafeFollowWaitForLanding(
+    bool human_airborne,bool cpu_grounded,bool at_edge,
+    bool stable_ground,bool fragile_ground,bool recent_loss,
+    bool has_committed_route,bool optional_health_route) {
+  return human_airborne && cpu_grounded && at_edge &&
+         stable_ground && !fragile_ground && !recent_loss &&
+         !has_committed_route && !optional_health_route;
+}
