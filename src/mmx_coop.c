@@ -1,6 +1,7 @@
 #include "mmx_coop.h"
 #include "mmx_cpu_antistuck.h"
 #include "mmx_cpu_deep_descent.h"
+#include "mmx_cpu_jump_learning.h"
 #include "mmx_coop_view.h"
 #include "mmx_renderer.h"
 #include "mmx_coop_trace.h"
@@ -71,6 +72,8 @@ static uint8_t cpu_stall_ticks;
 static MmxCpuAntiStuckState cpu_antistuck;
 /* Committed route to a verified floor >112px beneath either CPU actor. */
 static MmxCpuDeepDrop cpu_deep_drop;
+/* Host-only successful human movement demonstrations, session scoped. */
+static MmxCpuJumpLearning cpu_human_demos;
 static uint8_t cpu_zero_melee_cooldown;
 static bool cpu_zero_dash_was_active;
 static bool cpu_wall_escape_reported;
@@ -448,7 +451,8 @@ static void cpu_companion_reset_motion(void) {
   cpu_crumble_cross_start_x=0;
 }
 void MmxCoopReset(void) {
-  cpu_companion_reset_motion();cpu_human_seat=cpu_swap_trigger_down=cpu_rescue_cooldown=0;
+  cpu_companion_reset_motion();
+  MmxCpuJumpLearnReset(&cpu_human_demos);cpu_human_seat=cpu_swap_trigger_down=cpu_rescue_cooldown=0;
   cpu_l2_trigger_held=false;
   platform_entry.valid=false;lift_reset();shot_ghost_reset();
   MmxCoopViewsResetWorld();
@@ -2714,11 +2718,44 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
         "[cpu-crumble] jump-before-collapse x=%d y=%d dir=%d "
         "hole=%d landing=%d\n",
         x,y,direction,crumble_gap,crumble_landing);
-  /* Hold native jump for 21 input frames in total (this frame plus
-   * 20 polls), allowing the game's variable-height jump to finish its
-   * ascent. Release earlier if native ground contact returns or a real
-   * airborne wall contact takes priority. */
+  /* Ground-verified jumps may borrow the human's demonstrated B-hold
+   * timing, but ONLY if the human actually landed in the same stage,
+   * similar geometry, and direction. This does not license a missing
+   * floor crossing: existing live terrain checks above remain decisive.
+   * No wall kicks, pit drops, ordinary obstacle hops or unsafe routes
+   * receive a learned override. */
   cpu_jump_hold_frames=20;
+  if (getenv("MMX_CPU_LEARN") && edge && short_landing &&
+      !raised_wall && !goal_wall && !crumble_lost &&
+      landing_distance>0 && direction &&
+      cpu_companion_supported(
+          ram,x+direction*landing_distance,feet-landing_rise) &&
+      !cpu_companion_recent_road_loss_near(
+          x+direction*landing_distance,feet-landing_rise,48)) {
+    const MmxCpuJumpDemo *demo=MmxCpuJumpLearnMatch(
+        &cpu_human_demos,ram[0x1f7a],
+        x,y,direction,
+        x+direction*landing_distance,feet-landing_rise-16,true);
+    if (demo) {
+      /* pending=1+N controller polls. Existing takeoff code provides
+       * the initial B frame, so the timer owns only the remaining N. */
+      unsigned hold=MmxCpuJumpLearnHold(demo,21);
+      cpu_jump_hold_frames=(uint8_t)(hold-1);
+      if (getenv("MMX_CPU_TRACE"))
+        fprintf(stderr,
+            "[cpu-learn] match takeoff=%d,%d land=%d,%d "
+            "human=%d,%d->%d,%d hold=%u human_hold=%u "
+            "cue=%u dash=%d actor=%s\n",
+            x,y,x+direction*landing_distance,
+            feet-landing_rise-16,
+            (int)demo->start_x,(int)demo->start_y,
+            (int)demo->end_x,(int)demo->end_y,
+            (unsigned)(cpu_jump_hold_frames+1),
+            (unsigned)demo->jump_hold,
+            (unsigned)demo->cues,(int)demo->dash_used,
+            follower->character==MMX_COOP_ZERO?"Zero":"X");
+    }
+  }
   cpu_jump_seen_airborne=false;
   /* An ordinary jump that starts at a verified gap or raised-wall route
    * must keep steering through the FALL, even after B/dash are released
@@ -2741,8 +2778,9 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
           x,y,direction,(int)edge,(int)(raised_wall||goal_wall));
   }
   if (getenv("MMX_CPU_TRACE"))
-    fprintf(stderr,"[cpu-jump] takeoff x=%d y=%d mode=%d hold=21 landing_dist=%d rise=%d\n",
-            x,y,(int)move,landing_distance,landing_rise);
+    fprintf(stderr,"[cpu-jump] takeoff x=%d y=%d mode=%d hold=%u landing_dist=%d rise=%d\n",
+            x,y,(int)move,(unsigned)(cpu_jump_hold_frames+1),
+            landing_distance,landing_rise);
   /* A climb attempt can repeat shortly after a failed takeoff; ordinary
    * short-hop/ledge navigation retains the longer anti-spam cooldown. */
   cpu_jump_cooldown_frames=(move==MMX_CPU_MOVE_CLIMB) ? 24 : 48;
@@ -2813,6 +2851,61 @@ void MmxCoopPoll(uint16_t p1, uint16_t p2) {
     }
     cpu_swap_trigger_down=held;
     inputs[cpu_human_seat]=p1&4095;
+    /* Observe the REAL human, not the AI. The body snapshot is from
+     * native gameplay, and the controller bitmask is from this poll.
+     * The teacher's successful jump/landing is recorded only after
+     * confirmed collision support. This memory never changes ROM state.
+     * Separate explicit opt-in from MMX_CPU_TRACE for safe A/B tests. */
+    if (getenv("MMX_CPU_LEARN") && state.initialized &&
+        !state.menu_owner && !state.scene_owner && !state.stage_pending) {
+      const MmxCoopPlayer *h=&state.players[cpu_human_seat];
+      int hx=(int)word(h->body+5),hy=(int)word(h->body+8);
+      uint16_t pad=inputs[cpu_human_seat];
+      int hdir=(pad&MMX_CPU_RIGHT)?1:
+               (pad&MMX_CPU_LEFT)?-1:0;
+      bool on_ground=(h->body[0x2b]&4)!=0;
+      bool safe_ground=on_ground &&
+          cpu_companion_supported(g_ram,hx,hy+16);
+      unsigned cues=0;
+      if (safe_ground && hdir &&
+          cpu_companion_early_missing_ground(
+              g_ram,hx,hy+16,hdir))
+        cues|=MMX_CPU_DEMO_GAP;
+      if (safe_ground && hdir &&
+          cpu_companion_obstacle_ahead(g_ram,hx,hy,hdir))
+        cues|=MMX_CPU_DEMO_OBSTACLE;
+      unsigned ground_tile=MmxWeaponsTerrainClass(g_ram,hx,hy+18);
+      if (ground_tile==0x34 || ground_tile==0x35)
+        cues|=MMX_CPU_DEMO_FRAGILE;
+      bool was_tracking=cpu_human_demos.tracking;
+      const MmxCpuJumpDemo *new_demo=MmxCpuJumpLearnObserve(
+          &cpu_human_demos,g_ram[0x1f7a],h->character,
+          hx,hy,on_ground,safe_ground &&
+              ground_tile!=0x34 && ground_tile!=0x35,
+          hdir,(pad&MMX_CPU_JUMP)!=0,(pad&MMX_CPU_DASH)!=0,cues);
+      if (getenv("MMX_CPU_TRACE")) {
+        if (!was_tracking && cpu_human_demos.tracking)
+          fprintf(stderr,
+              "[human-learn] takeoff? actor=%s at=%d,%d "
+              "dir=%d cues=%u jump=%d dash=%d\n",
+              h->character==MMX_COOP_ZERO?"Zero":"X",
+              hx,hy,hdir,cues,(int)((pad&MMX_CPU_JUMP)!=0),
+              (int)((pad&MMX_CPU_DASH)!=0));
+        if (new_demo)
+          fprintf(stderr,
+              "[human-learn] success actor=%s from=%d,%d "
+              "to=%d,%d dx=%d dy=%d hold=%u air=%u "
+              "cues=%u dash=%d\n",
+              new_demo->character==MMX_COOP_ZERO?"Zero":"X",
+              (int)new_demo->start_x,(int)new_demo->start_y,
+              (int)new_demo->end_x,(int)new_demo->end_y,
+              (int)new_demo->end_x-(int)new_demo->start_x,
+              (int)new_demo->end_y-(int)new_demo->start_y,
+              (unsigned)new_demo->jump_hold,
+              (unsigned)new_demo->airborne_ticks,
+              (unsigned)new_demo->cues,(int)new_demo->dash_used);
+      }
+    }
     unsigned ai=cpu_human_seat^1;
     inputs[ai]=cpu_companion_input(g_ram,cpu_human_seat);
     if (state.initialized && !state.menu_owner && !state.scene_owner &&
