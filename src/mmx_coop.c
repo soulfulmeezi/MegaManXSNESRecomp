@@ -2880,8 +2880,9 @@ void MmxCoopPoll(uint16_t p1, uint16_t p2) {
       bool was_tracking=cpu_human_demos.tracking;
       const MmxCpuJumpDemo *new_demo=MmxCpuJumpLearnObserve(
           &cpu_human_demos,g_ram[0x1f7a],h->character,
-          hx,hy,on_ground,safe_ground &&
-              ground_tile!=0x34 && ground_tile!=0x35,
+          hx,hy,on_ground,safe_ground,
+          safe_ground && ground_tile!=0x34 && ground_tile!=0x35 &&
+              !cpu_companion_recent_road_loss_near(hx,hy+16,24),
           hdir,(pad&MMX_CPU_JUMP)!=0,(pad&MMX_CPU_DASH)!=0,cues);
       if (getenv("MMX_CPU_TRACE")) {
         if (!was_tracking && cpu_human_demos.tracking)
