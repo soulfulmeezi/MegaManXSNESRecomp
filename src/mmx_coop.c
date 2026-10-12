@@ -1,5 +1,6 @@
 #include "mmx_coop.h"
 #include "mmx_cpu_antistuck.h"
+#include "mmx_cpu_deep_descent.h"
 #include "mmx_coop_view.h"
 #include "mmx_renderer.h"
 #include "mmx_coop_trace.h"
@@ -68,6 +69,8 @@ static bool cpu_l2_trigger_held;
 static uint8_t cpu_stall_ticks;
 /* Throttle grounded no-progress obstacle jumps; deliberate routes bypass. */
 static MmxCpuAntiStuckState cpu_antistuck;
+/* Committed route to a verified floor >112px beneath either CPU actor. */
+static MmxCpuDeepDrop cpu_deep_drop;
 static uint8_t cpu_zero_melee_cooldown;
 static bool cpu_zero_dash_was_active;
 static bool cpu_wall_escape_reported;
@@ -427,6 +430,7 @@ static void cpu_companion_reset_motion(void) {
   cpu_jump_direction=cpu_wall_direction=0;
   cpu_stall_ticks=0;cpu_last_x=0;cpu_stall_direction=0;
   memset(&cpu_antistuck,0,sizeof(cpu_antistuck));
+  memset(&cpu_deep_drop,0,sizeof(cpu_deep_drop));
   cpu_zero_melee_cooldown=0;cpu_zero_dash_was_active=false;
   cpu_wall_escape_reported=false;
   cpu_pit_seek_wall_dir=0;
@@ -947,6 +951,63 @@ static bool cpu_companion_lower_landing(const uint8_t *ram,
   return false;
 }
 
+
+/* A lower platform 128..256px BELOW the CPU needs a distinct planner.
+ * The legacy lower_landing() correctly handles only 20..112px drops.
+ * Deep routes are admitted ONLY when X/Zero is grounded on the lower
+ * shelf, there is an actual live floor there, the drop shaft is open,
+ * and the floor is still within the active camera's death boundary.
+ *
+ * The approach stays close to the leader, but takes place on native
+ * physics (walking OFF the edge, never teleporting or forced velocity).
+ * Sample BOTH sides of the intended 32px landing zone. */
+static bool cpu_companion_deep_lower_landing(
+    const uint8_t *ram,int x,int feet,int dir,
+    int leader_x,int leader_feet,
+    int *target_x_out,int *target_feet_out) {
+  if (!ram || !dir ||
+      !cpu_companion_supported(ram,leader_x,leader_feet)) return false;
+  int visible_bottom=(int)word(ram+0x1e5c)+224;
+  for (int d=40;d<=120;d+=8) {
+    int sx=x+dir*d;
+    if (abs(sx-leader_x)>36) continue;
+    for (int depth=128;depth<=256;depth+=8) {
+      int sample=feet+depth,surface=0;
+      unsigned tile=MmxWeaponsTerrainClass(ram,sx,sample);
+      if (!cpu_companion_walkable(tile) ||
+          !MmxWeaponsTerrainSolid(ram,sx,sample,true,&surface))
+        continue;
+      int delta=surface-feet;
+      bool landing_safe=
+          cpu_companion_supported(ram,sx-dir*12,surface+2) &&
+          cpu_companion_supported(ram,sx+dir*12,surface+2) &&
+          !MmxWeaponsTerrainSolid(ram,sx,surface-20,false,NULL) &&
+          !MmxWeaponsTerrainSolid(ram,sx,surface-36,false,NULL) &&
+          !cpu_companion_recent_road_loss_near(sx,surface,36);
+      if (!MmxCpuDeepDropAllowed(
+              true,true,landing_safe,true,
+              surface<=visible_bottom-12,
+              delta,d,surface-leader_feet))
+        continue;
+      bool shaft_clear=true;
+      /* Reject an intervening wall/floor, even if lower collision samples
+       * claim a distant destination is walkable. The drop must have an
+       * open vertical corridor from the edge to above the safe floor. */
+      for (int fy=feet+32;fy<surface-36;fy+=16) {
+        if (MmxWeaponsTerrainSolid(ram,sx,fy,false,NULL) ||
+            MmxWeaponsTerrainSolid(ram,x+dir*32,fy,false,NULL)) {
+          shaft_clear=false;break;
+        }
+      }
+      if (!shaft_clear) continue;
+      if (target_x_out) *target_x_out=sx;
+      if (target_feet_out) *target_feet_out=surface;
+      return true;
+    }
+  }
+  return false;
+}
+
 /* Deliberate pit traverse: locate a physical wall BELOW the far lip.
  * Demand open terrain through the gap and an exposed, continuous wall
  * face within an ordinary jump/dash approach range. The leader must separately
@@ -1249,7 +1310,7 @@ static uint16_t cpu_companion_zero_combat(const uint8_t *r,
    * nearby enemy he can stand and fire instead of walking into it. */
   int facing=(f->body[0x69]&64)?1:-1;
   bool aimed=target.found && facing==target.direction;
-  bool safe_turn=target.found && !recovering &&
+  bool safe_turn=target.found && !recovering && !cpu_deep_drop.ticks &&
       (!cpu_nav_must_wait || cpu_boss_standoff_hold) &&
       (f->body[0x2b]&4)!=0 &&
       !(input&(MMX_CPU_JUMP|MMX_CPU_DASH)) &&
@@ -1339,7 +1400,7 @@ static uint16_t cpu_companion_zero_combat(const uint8_t *r,
    * or through a solid wall. Air dash is exclusively Modern mode and
    * requires separate terrain-safe flight planning. */
   bool safe_dash=false;
-  if (!(target.found && target.boss) &&
+  if (!cpu_deep_drop.ticks && !(target.found && target.boss) &&
       (f->body[0x2b]&4) && dx*dir>112 &&
       (input&(dir>0?MMX_CPU_RIGHT:MMX_CPU_LEFT)) &&
       cpu_companion_supported(r,x,y+16) &&
@@ -1621,6 +1682,27 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
   int x=(int)word(follower->body+5),y=(int)word(follower->body+8);
   bool grounded=(follower->body[0x2b]&4)!=0;
   MmxCpuAntiStuckTick(&cpu_antistuck,grounded,x,y);
+  if (cpu_deep_drop.ticks) {
+    bool route_safe=
+        cpu_companion_supported(ram,cpu_deep_drop.target_x,
+                               cpu_deep_drop.target_feet) &&
+        cpu_companion_supported(
+            ram,cpu_deep_drop.target_x+cpu_deep_drop.direction*12,
+            cpu_deep_drop.target_feet) &&
+        cpu_deep_drop.target_feet<=
+            (int)word(ram+0x1e5c)+224-12 &&
+        !cpu_companion_recent_road_loss_near(
+            cpu_deep_drop.target_x,cpu_deep_drop.target_feet,36);
+    bool was_airborne=cpu_deep_drop.was_airborne;
+    int tx=cpu_deep_drop.target_x,tf=cpu_deep_drop.target_feet;
+    if (!MmxCpuDeepDropTick(&cpu_deep_drop,grounded,route_safe) &&
+        getenv("MMX_CPU_TRACE"))
+      fprintf(stderr,
+          "[cpu-deep-drop] %s x=%d y=%d target=%d,%d "
+          "was_airborne=%d route_safe=%d\n",
+          grounded&&was_airborne?"landed":"aborted",
+          x,y,tx,tf,(int)was_airborne,(int)route_safe);
+  }
   if (cpu_crumble_defense_cooldown) --cpu_crumble_defense_cooldown;
   /* X can trigger a collapse while Zero is far away or in the air.
    * Sample live collision around BOTH players each AI frame. */
@@ -1659,10 +1741,13 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
    * native jump gets its own direction while airborne. */
   int direction=MmxCoopCpuAirRouteDirection(
       dx,cpu_air_route_ticks ? cpu_air_route_dir : 0,!grounded);
+  if (cpu_deep_drop.ticks)
+    direction=MmxCpuDeepDropSteer(&cpu_deep_drop,x,grounded);
   /* Only the CPU seeks HEALTH when seriously hurt; it never copies
    * the human's descent or pursues an unverified lower platform. */
   MmxCpuHealthGoal health={0};
-  if (grounded && !cpu_air_route_ticks && !cpu_pit_wall_ticks &&
+  if (grounded && !cpu_deep_drop.ticks &&
+      !cpu_air_route_ticks && !cpu_pit_wall_ticks &&
       !cpu_jump_hold_frames &&
       cpu_wall_recovery_phase==MMX_CPU_WALL_IDLE) {
     health=cpu_companion_health_goal(
@@ -1753,6 +1838,7 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
     cpu_last_supported_y_valid=true;
     cpu_pit_seek_wall_dir=0;
   } else if (!grounded && descending &&
+             !cpu_deep_drop.ticks &&
              cpu_wall_recovery_phase==MMX_CPU_WALL_IDLE) {
     int bottom=(int)word(ram+0x1e5c)+224;
     bool falling_into_pit=
@@ -1843,6 +1929,24 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
     cpu_wall_direction=0;
     cpu_wall_escape_reported=false;
     cpu_jump_cooldown_frames=0;
+  }
+  /* During a verified deep descent, do not jump back up the side wall.
+   * Let native gravity and, if contacted, native wall-slide take the
+   * companion toward the committed safe lower shelf. If that shelf is
+   * invalidated, the route is cleared above and the original emergency
+   * wall-climb machinery immediately resumes. */
+  if (!grounded && cpu_deep_drop.ticks &&
+      cpu_wall_recovery_phase==MMX_CPU_WALL_IDLE) {
+    int steer=MmxCpuDeepDropSteer(&cpu_deep_drop,x,false);
+    if (getenv("MMX_CPU_TRACE") && snes_frame_counter%24==0)
+      fprintf(stderr,
+          "[cpu-deep-drop] descending x=%d y=%d target=%d,%d "
+          "steer=%d slide=%d near_wall=%d ticks=%u\n",
+          x,y,cpu_deep_drop.target_x,cpu_deep_drop.target_feet,
+          steer,(int)wall_slide,touching_wall,
+          (unsigned)cpu_deep_drop.ticks);
+    return (uint16_t)(steer>0?MMX_CPU_RIGHT:
+                      steer<0?MMX_CPU_LEFT:0);
   }
   /* Wall contact starts a PREPARATION phase even before the native
    * animation switches to slide. The jump itself is only pressed on a
@@ -2365,6 +2469,39 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
   }
   bool climb_takeoff=(raised_wall || goal_wall) &&
                      (edge || wall_distance<=48);
+  /* X/Zero may be safely grounded several ledges below the CPU, beyond
+   * the short drop planner's 112px ceiling. A real lower floor and open
+   * shaft permit walking off the edge WITHOUT jumping or climbing back.
+   * Do not attempt a deep drop while carrying a committed jump/wall
+   * approach or while chasing an optional health pickup. */
+  if (edge && !cpu_deep_drop.ticks && !health.mode &&
+      grounded && (leader->body[0x2b]&4)!=0 &&
+      (int)word(leader->body+8)-y>=112 &&
+      !cpu_air_route_ticks && !cpu_pit_wall_ticks &&
+      !cpu_jump_hold_frames &&
+      cpu_wall_recovery_phase==MMX_CPU_WALL_IDLE &&
+      dx*direction>=40 && direction) {
+    int target_x=0,target_feet=0;
+    if (cpu_companion_deep_lower_landing(
+            ram,x,feet,direction,
+            (int)word(leader->body+5),
+            (int)word(leader->body+8)+16,
+            &target_x,&target_feet)) {
+      cpu_deep_drop=(MmxCpuDeepDrop){
+          .target_x=target_x,.target_feet=target_feet,
+          .direction=(int8_t)direction,.ticks=150};
+      cpu_jump_hold_frames=cpu_cliff_dash_frames=0;
+      cpu_jump_seen_airborne=false;
+      cpu_nav_must_wait=false;
+      if (getenv("MMX_CPU_TRACE"))
+        fprintf(stderr,
+            "[cpu-deep-drop] commit x=%d feet=%d target=%d,%d "
+            "dir=%d X_dx=%d X_dy=%d; walking off verified edge\n",
+            x,feet,target_x,target_feet,direction,dx,
+            (int)word(leader->body+8)-y);
+      return (uint16_t)(direction>0?MMX_CPU_RIGHT:MMX_CPU_LEFT);
+    }
+  }
   /* Opt-in field diagnostics make real stage geometry inspectable without
    * assuming a screenshot reveals the actual SNES collision classes.
    * This never affects controller input or deterministic guest state. */
