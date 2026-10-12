@@ -4,7 +4,7 @@
 
 static const MmxCpuJumpDemo *takeoff(
     MmxCpuJumpLearning *s,int x,int y,unsigned cues) {
-  return MmxCpuJumpLearnObserve(s,0,0,x,y,true,true,true,true,1,true,false,cues);
+  return MmxCpuJumpLearnObserve(s,0,0,x,y,true,true,true,1,true,false,cues);
 }
 static void record_real_success_and_match(void) {
   MmxCpuJumpLearning s={0};
