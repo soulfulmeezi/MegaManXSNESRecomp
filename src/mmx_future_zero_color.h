@@ -1,4 +1,5 @@
 #pragma once
+#include <stdbool.h>
 #include <stdint.h>
 /* SNES BGR555 armor remap. Only saturated, strongly red-dominant pixels
  * are transformed. Gold hair, skin, green gems, neutral outlines and
