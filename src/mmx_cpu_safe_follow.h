@@ -1,4 +1,5 @@
 #pragma once
+#include <stdbool.h>
 #include <stdint.h>
 /* Small ROM-free policy for opt-in offline CPU companion freedom.
  * X's native authored stage bounds and collision remain mandatory.
