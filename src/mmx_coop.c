@@ -2,6 +2,7 @@
 #include "mmx_cpu_antistuck.h"
 #include "mmx_cpu_deep_descent.h"
 #include "mmx_cpu_jump_learning.h"
+#include "mmx_cpu_safe_follow.h"
 #include "mmx_coop_view.h"
 #include "mmx_renderer.h"
 #include "mmx_coop_trace.h"
@@ -2282,7 +2283,8 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
       cpu_jump_seen_airborne=false;
     } else {
       --cpu_jump_hold_frames;
-      uint16_t jump=(cpu_jump_direction>0 ? MMX_CPU_RIGHT : MMX_CPU_LEFT)|MMX_CPU_JUMP;
+      uint16_t jump=MmxCpuSafeFollowJumpPad(
+          cpu_jump_direction,MMX_CPU_LEFT,MMX_CPU_RIGHT,MMX_CPU_JUMP);
       if (cpu_cliff_dash_frames) {
         jump|=MMX_CPU_DASH;
         --cpu_cliff_dash_frames;
@@ -4322,6 +4324,11 @@ static bool shared_screen(void) {
       g_ram[0xd1]==2 && g_ram[0xd2]==4 && g_ram[0xd3]==4 &&
       !g_ram[0x1f0c] && !g_ram[0x1f23] && !g_ram[0x1f48];
 }
+/* Explicit opt-in, offline only. Shared human co-op and netplay continue
+ * to use the original 224px tether and midpoint camera. */
+static bool cpu_safe_follow_active(void) {
+  return cpu_traversal_active() && getenv("MMX_CPU_FREE_FOLLOW") != NULL;
+}
 static void constrain_player(uint8_t *r) {
   bool independent=MmxCoopViewsOnline();
   if(independent || shared_screen()) {
@@ -4344,7 +4351,7 @@ static void constrain_player(uint8_t *r) {
   if (!shared_screen()) return;
   const MmxCoopPlayer *other=&state.players[state.current^1];
   int x=word(r+0xbad),ox=word(other->body+5);
-  int limited=x<ox-224 ? ox-224 : x>ox+224 ? ox+224 : x;
+  int limited=MmxCpuSafeFollowClamp(x,ox,cpu_safe_follow_active());
   if (limited!=x) {putword(r+0xbad,(unsigned)limited);r[0xbac]=0;putword(r+0xbc2,0);}
 }
 static void camera_hook(CpuState *cpu,uint32_t pc) {
@@ -4382,7 +4389,15 @@ static void camera_hook(CpuState *cpu,uint32_t pc) {
    * other's screen position jumped a pixel every few frames. */
   int a=(int)word(state.players[state.anchor].body+axis);
   int b=(int)word(state.players[state.anchor^1].body+axis);
-  cpu->A=(uint16_t)(a+(b-a)/2);
+  int target=a+(b-a)/2;
+  if (axis==5 && cpu_safe_follow_active() &&
+      state.players[cpu_human_seat].status==MMX_COOP_ALIVE &&
+      state.players[cpu_human_seat^1].status==MMX_COOP_ALIVE) {
+    int human=(int)word(state.players[cpu_human_seat].body+5);
+    int companion=(int)word(state.players[cpu_human_seat^1].body+5);
+    target=MmxCpuSafeFollowCameraX(human,companion,true);
+  }
+  cpu->A=(uint16_t)target;
   cpu->_flag_N=(cpu->A&0x8000)!=0;cpu->_flag_Z=cpu->A==0;
   cpu->P=(cpu->P&~0x82)|(cpu->_flag_N?0x80:0)|(cpu->_flag_Z?2:0);
 }
