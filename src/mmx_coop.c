@@ -2127,6 +2127,23 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
           (int)cpu_tall_wall_climb,(int)upper_lip);
     return wall_input;
   }
+  /* A committed lower shelf must remain the only route while the CPU
+   * is still on the lip. Without this grounded override the following
+   * frame can select an ordinary JUMP and climb back up instead of
+   * completing the approved walk-off. The tick above bounds the approach
+   * if the CPU never actually leaves the ledge. */
+  if (grounded && cpu_deep_drop.ticks &&
+      cpu_wall_recovery_phase==MMX_CPU_WALL_IDLE) {
+    int steer=MmxCpuDeepDropSteer(&cpu_deep_drop,x,true);
+    if (getenv("MMX_CPU_TRACE") && snes_frame_counter%24==0)
+      fprintf(stderr,
+          "[cpu-deep-drop] approach x=%d y=%d target=%d,%d "
+          "steer=%d ticks=%u\n",
+          x,y,cpu_deep_drop.target_x,cpu_deep_drop.target_feet,
+          steer,(unsigned)cpu_deep_drop.ticks);
+    return (uint16_t)(steer>0?MMX_CPU_RIGHT:
+                      steer<0?MMX_CPU_LEFT:0);
+  }
   /* A miniboss is NOT terrain. The old "obstacle or stall -> JUMP"
    * rule made the follower jump into a large enemy repeatedly with no
    * landing target (edge=0, landing_dist=0). Prioritize safe spacing for
