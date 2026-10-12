@@ -20,6 +20,18 @@ static void reject_impossible_geometry(void) {
   assert(!MmxCpuDeepDropAllowed(true,true,true,true,true,224,176,0));
   assert(!MmxCpuDeepDropAllowed(true,true,true,true,true,224,72,50));
 }
+static void intermediate_ledge_when_direct_floor_unreachable(void) {
+  assert(MmxCpuIntermediateDropAllowed(
+      true,true,true,true,true,80,72,144,true));
+  assert(!MmxCpuIntermediateDropAllowed(
+      true,true,true,true,true,80,72,144,false));
+  assert(!MmxCpuIntermediateDropAllowed(
+      true,true,true,false,true,80,72,144,true));
+  assert(!MmxCpuIntermediateDropAllowed(
+      true,true,true,true,true,80,120,144,true));
+  assert(!MmxCpuIntermediateDropAllowed(
+      true,true,true,true,true,80,72,20,true));
+}
 static void committed_direction_and_no_backtracking(void) {
   MmxCpuDeepDrop route={.target_x=2604,.target_feet=591,
                          .direction=1,.ticks=150};
@@ -50,9 +62,10 @@ int main(void) {
   lower_verified_floor();
   require_safe_ground_and_visible_target();
   reject_impossible_geometry();
+  intermediate_ledge_when_direct_floor_unreachable();
   committed_direction_and_no_backtracking();
   invalidated_floor_hands_back_recovery();
   abandon_lip_that_never_drops();
-  puts("CPU deep descent checks: 6 passed");
+  puts("CPU deep descent checks: 7 passed");
   return 0;
 }
