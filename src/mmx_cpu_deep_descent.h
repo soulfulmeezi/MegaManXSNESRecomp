@@ -26,6 +26,20 @@ static inline bool MmxCpuDeepDropAllowed(
       leader_floor_offset>=-24 && leader_floor_offset<=24;
 }
 
+/* If X is even farther below, an intermediate ledge can be a safer
+ * first step. Require positive progress toward X and a stable floor
+ * considerably ABOVE X's final elevation; then replan after landing. */
+static inline bool MmxCpuIntermediateDropAllowed(
+    bool human_grounded,bool cpu_grounded,bool floor_verified,
+    bool clear_shaft,bool visible,int depth,int horizontal_distance,
+    int remaining_above_leader,bool closer_to_leader) {
+  return human_grounded && cpu_grounded && floor_verified &&
+      clear_shaft && visible && closer_to_leader &&
+      depth>=56 && depth<=112 &&
+      horizontal_distance>=40 && horizontal_distance<=104 &&
+      remaining_above_leader>=48;
+}
+
 /* Once airborne, steer toward the COMMITTED landing, not the moving player.
  * Never reverse after overshooting the target: that might cross another
  * void and recreates the original gap backtracking bug. */
