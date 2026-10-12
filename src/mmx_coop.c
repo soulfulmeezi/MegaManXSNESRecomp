@@ -128,6 +128,7 @@ _Static_assert(sizeof(MmxCoopState) == 4664, "Co-op save ABI");
 static bool join_tick(uint8_t *r);
 static void place_other(uint8_t *r,uint16_t x,uint16_t y,bool preserve);
 static bool floor_below(const uint8_t *r,const uint8_t *b);
+static bool cpu_safe_follow_active(void);
 static void cpu_companion_rescue(uint8_t *r);
 /* Registers the item routine passed into $84:AB81/AB56; see platform_hook. */
 static struct {bool valid;uint16_t d,s,a,x,y;uint8_t p,db;} platform_entry;
@@ -2418,7 +2419,7 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
     if (getenv("MMX_CPU_TRACE") && snes_frame_counter%45==0)
       fprintf(stderr,
           "[cpu-safe-wait] X airborne; Zero on stable ledge "
-          "x=%d feet=%d X_dx=%d, awaiting confirmed landing\\n",
+          "x=%d feet=%d X_dx=%d, awaiting confirmed landing\n",
           x,feet,dx);
     return input&(uint16_t)~(MMX_CPU_LEFT|MMX_CPU_RIGHT|
                               MMX_CPU_JUMP|MMX_CPU_DASH);
