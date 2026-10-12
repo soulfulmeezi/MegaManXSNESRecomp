@@ -32,7 +32,7 @@ static inline void MmxCpuJumpLearnReset(MmxCpuJumpLearning *s) {
  * Inputs: dir -1/+1/0, independent of the follower's own decisions. */
 static inline const MmxCpuJumpDemo *MmxCpuJumpLearnObserve(
     MmxCpuJumpLearning *s,unsigned stage,unsigned character,
-    int x,int y,bool grounded,bool safe_ground,
+    int x,int y,bool grounded,bool supported,bool stable_landing,
     int dir,bool jump,bool dash,unsigned cues) {
   if (!s) return NULL;
   if (!s->initialized || s->stage!=(uint8_t)stage) {
@@ -67,7 +67,7 @@ static inline const MmxCpuJumpDemo *MmxCpuJumpLearnObserve(
       int dx=x-(int)s->pending.start_x;
       int dy=y-(int)s->pending.start_y;
       int adx=dx<0?-dx:dx,ady=dy<0?-dy:dy;
-      if (safe_ground && s->pending.airborne_ticks>=4 &&
+      if (stable_landing && s->pending.airborne_ticks>=4 &&
           s->pending.airborne_ticks<=110 &&
           (adx>=24 || ady>=24) &&
           (!s->pending.direction || dx*s->pending.direction>=0)) {
@@ -89,7 +89,7 @@ static inline const MmxCpuJumpDemo *MmxCpuJumpLearnObserve(
   }
   /* Arm a takeoff only on an actual NEW player B edge, on safe ground.
    * Collision context is captured when the player chooses to jump. */
-  if (!s->tracking && grounded && safe_ground && jump &&
+  if (!s->tracking && grounded && supported && jump &&
       !s->previous_jump) {
     memset(&s->pending,0,sizeof(s->pending));
     s->pending.start_x=(int16_t)x;
