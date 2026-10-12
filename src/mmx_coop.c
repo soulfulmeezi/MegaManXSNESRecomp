@@ -2556,6 +2556,13 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
             (int)word(leader->body+8)-y);
       return (uint16_t)(direction>0?MMX_CPU_RIGHT:MMX_CPU_LEFT);
     }
+    if (getenv("MMX_CPU_TRACE") && snes_frame_counter%90==0)
+      fprintf(stderr,
+          "[cpu-deep-drop] no verified lower route x=%d feet=%d "
+          "X_x=%u X_feet=%u camera_bottom=%u\n",
+          x,feet,(unsigned)word(leader->body+5),
+          (unsigned)(word(leader->body+8)+16),
+          (unsigned)(word(ram+0x1e5c)+224));
   }
   /* Opt-in field diagnostics make real stage geometry inspectable without
    * assuming a screenshot reveals the actual SNES collision classes.
