@@ -32,6 +32,15 @@ static void no_rush_and_camera_are_continuous(void) {
   assert(MmxCpuSafeFollowCameraX(1000,839,true)==920);
   assert(MmxCpuSafeFollowCameraX(1000,700,true)==920);
   assert(MmxCpuSafeFollowCameraX(1000,900,true)==950);
+  /* Wait only when X is testing the next route and Zero's own
+   * platform is still safely supported. Fragile road must not wait. */
+  assert(MmxCpuSafeFollowWaitForLanding(true,true,true,true,false,false,false,false));
+  assert(!MmxCpuSafeFollowWaitForLanding(false,true,true,true,false,false,false,false));
+  assert(!MmxCpuSafeFollowWaitForLanding(true,true,true,true,true,false,false,false));
+  assert(!MmxCpuSafeFollowWaitForLanding(true,true,true,true,false,true,false,false));
+  assert(!MmxCpuSafeFollowWaitForLanding(true,true,true,false,false,false,false,false));
+  assert(!MmxCpuSafeFollowWaitForLanding(true,true,true,true,false,false,true,false));
+  assert(!MmxCpuSafeFollowWaitForLanding(true,true,true,true,false,false,false,true));
 }
 static void vertical_jump_has_no_horizontal_input(void) {
   assert(MmxCpuSafeFollowJumpPad(0,0x40,0x80,1)==1);
