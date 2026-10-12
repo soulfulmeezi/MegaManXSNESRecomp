@@ -46,9 +46,12 @@ static inline bool MmxCpuIntermediateDropAllowed(
 static inline int MmxCpuDeepDropSteer(
     const MmxCpuDeepDrop *route,int x,bool grounded) {
   if (!route || !route->ticks || !route->direction) return 0;
+  int remaining=(route->target_x-x)*route->direction;
+  /* Never walk beyond a verified landing while waiting to leave the
+   * current lip. Prefer timing out over overshooting into new terrain. */
+  if (remaining<=0) return 0;
   if (grounded && !route->was_airborne) return route->direction;
-  return (route->target_x-x)*route->direction>12 ?
-      route->direction : 0;
+  return remaining>12 ? route->direction : 0;
 }
 
 /* Successful landings reset the route. A stale/unverified destination must
