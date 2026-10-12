@@ -36,6 +36,7 @@ static void committed_direction_and_no_backtracking(void) {
   MmxCpuDeepDrop route={.target_x=2604,.target_feet=591,
                          .direction=1,.ticks=150};
   assert(MmxCpuDeepDropSteer(&route,2532,true)==1);
+  assert(MmxCpuDeepDropSteer(&route,2605,true)==0);
   assert(MmxCpuDeepDropTick(&route,false,true));
   assert(MmxCpuDeepDropSteer(&route,2578,false)==1);
   assert(MmxCpuDeepDropSteer(&route,2598,false)==0);
