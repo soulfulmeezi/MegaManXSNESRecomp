@@ -2399,6 +2399,30 @@ static uint16_t cpu_companion_input(const uint8_t *ram,unsigned controlled_seat)
       cpu_companion_early_missing_ground(ram,x,feet,direction):0;
   bool crumble_lost=crumble_enabled &&
       cpu_companion_recent_road_loss(x,feet,direction);
+  /* The human may still be proving a route. Zero needn't leap at once
+   * merely to preserve his follow distance. Wait for human landing only
+   * on safe, NON-collapsing floor; an unstable bridge requires the
+   * existing immediate crumble response and must never be delayed. */
+  unsigned surface=MmxWeaponsTerrainClass(ram,x,feet+2);
+  bool fragile_here=surface==0x34 || surface==0x35;
+  if (cpu_safe_follow_active() && follower->character==MMX_COOP_ZERO &&
+      MmxCpuSafeFollowWaitForLanding(
+          (leader->body[0x2b]&4)==0,grounded,edge,
+          cpu_companion_supported(ram,x,feet),fragile_here,
+          cpu_companion_recent_road_loss_near(x,feet,48),
+          cpu_air_route_ticks || cpu_pit_wall_ticks || cpu_deep_drop.ticks ||
+              cpu_jump_hold_frames ||
+              cpu_wall_recovery_phase!=MMX_CPU_WALL_IDLE,
+          health.mode!=0)) {
+    cpu_nav_must_wait=true;
+    if (getenv("MMX_CPU_TRACE") && snes_frame_counter%45==0)
+      fprintf(stderr,
+          "[cpu-safe-wait] X airborne; Zero on stable ledge "
+          "x=%d feet=%d X_dx=%d, awaiting confirmed landing\\n",
+          x,feet,dx);
+    return input&(uint16_t)~(MMX_CPU_LEFT|MMX_CPU_RIGHT|
+                              MMX_CPU_JUMP|MMX_CPU_DASH);
+  }
   if (crumble_enabled && grounded && getenv("MMX_CPU_TRACE") &&
       snes_frame_counter%90==0) {
     fprintf(stderr,
