@@ -7,6 +7,7 @@
 #include "mmx_weapons.h"
 #include "mmx_weapon_combat.h"
 #include "mmx_coop_view.h"
+#include "mmx_x_earth_sections.h"
 #include <math.h>
 
 /* Mode-1 decode/composition follows SuperMetroidRecomp's sm_renderer.c.
@@ -23,8 +24,23 @@ typedef struct Piece {
    * pose 0..20 at submission, without changing the capture record size. */
   uint8_t tile, palette_pose; uint16_t object;
 } Piece;
+typedef struct EarthXContext {
+  unsigned object;
+  int origin_x, origin_y;
+  bool facing_left;
+} EarthXContext;
 static unsigned piece_pose(const Piece *p) {
   return (p->palette_pose&1)|((p->palette_pose>>3)&30);
+}
+static unsigned earth_x_section(unsigned object, int x, int y) {
+  if (object == 0xc38) return MMX_EARTH_SHOULDER;
+  if (object == 0xc58) return MMX_EARTH_FOREARM;
+  if (object == 0xc78) return MMX_EARTH_BOOT;
+  int ax = x < 0 ? -x : x;
+  if (y < -15) return ax >= 7 ? MMX_EARTH_SHOULDER : MMX_EARTH_HELMET;
+  if (y < -5) return ax >= 9 ? MMX_EARTH_SHOULDER : MMX_EARTH_CHEST;
+  if (y < 5) return ax >= 8 ? MMX_EARTH_FOREARM : MMX_EARTH_THIGH;
+  return MMX_EARTH_BOOT;
 }
 enum { MAX_PIECES = 2048 };
 typedef struct Frame {
@@ -772,7 +788,8 @@ static uint16_t background(const Ppu *p, const Raster *r, unsigned layer, int x,
 static void sprite(const Ppu *p, const Raster *r, int x, int sy, unsigned attr, int size,
                     int y, MmxRenderView view, uint16_t *out, bool margins_only,
                     const MmxSpriteAsset *asset, unsigned raw_tile, int *object_color,
-                    bool full_coordinates, unsigned zero_icon, bool red_tint) {
+                    bool full_coordinates, unsigned zero_icon, bool red_tint,
+                    const EarthXContext *earth) {
   int row = full_coordinates ? y - sy : (y - sy) & 255;
   if (row < 0 || row >= size) return;
   if (attr & 0x8000) row = size - 1 - row;
@@ -807,6 +824,16 @@ static void sprite(const Ppu *p, const Raster *r, int x, int sy, unsigned attr, 
          * blue ramp to red, using its existing dark-to-light shading. */
         if (blue>red && blue>green)
           object_color[dest]=(int)(blue | ((red<green ? red : green)<<5) | (red<<10));
+      }
+      if (earth) {
+        uint16_t color = (uint16_t)(object_color[dest] >= 0 ?
+            object_color[dest] : r->palette[(z | pixel) & 255]);
+        int local_x = x + c - earth->origin_x;
+        int local_y = sy + row - earth->origin_y;
+        if (earth->facing_left) local_x = -local_x;
+        unsigned section = earth_x_section(earth->object, local_x, local_y);
+        object_color[dest] = MmxEarthXFaceDetail(earth->object,section,local_x,local_y) ? color :
+            MmxEarthXArmorPixel(color, section, local_x, local_y);
       }
       if (x + c < 0 || x + c >= 256) ++stats.margin_sprite_pixels;
     }
@@ -936,11 +963,11 @@ static void moved_enemy_row(const MmxWeaponShot *s,const Ppu *p,const Raster *r,
     if(y<piece.y || y>=piece.y+piece.size) continue;
     if(s->weapon==6 && !s->charged && s->muzzle_pose!=3 && s->age>30 && (s->age&1)) {
       uint16_t flash[MMX_RENDER_MAX_WIDTH]={0};int flash_colors[MMX_RENDER_MAX_WIDTH];
-      sprite(p,r,piece.x,piece.y,attr,piece.size,y,view,flash,false,asset,piece.tile,flash_colors,true,false,false);
+      sprite(p,r,piece.x,piece.y,attr,piece.size,y,view,flash,false,asset,piece.tile,flash_colors,true,false,false,NULL);
       for(int x=0;x<view.width;++x) if(flash[x]) {
         objects[x]=flash[x];colors[x]=r->palette[128+(flash[x]&15)];
       }
-    } else sprite(p,r,piece.x,piece.y,attr,piece.size,y,view,objects,false,asset,piece.tile,colors,true,false,false);
+    } else sprite(p,r,piece.x,piece.y,attr,piece.size,y,view,objects,false,asset,piece.tile,colors,true,false,false,NULL);
   }
 }
 static void weapon_effects_row(const MmxWeaponCombatState *combat,const Ppu *p,const Raster *r,
@@ -1031,7 +1058,7 @@ static void teleport_actor_row(const uint8_t *ram,const MmxZeroState *zero,const
     const uint8_t *layout = a ? sprite_arrangement(0,pose) : NULL;
     if (layout) for (int i = layout[0] - 1; i >= 0; --i) {
       Piece s = make_piece(layout + i * 4,x,sy,flip,0x22,0,0,0xba8,pose);
-      sprite(p,r,s.x,s.y,s.attr,s.size,y,view,objects,false,a,s.tile,object_colors,true,false,false);
+      sprite(p,r,s.x,s.y,s.attr,s.size,y,view,objects,false,a,s.tile,object_colors,true,false,false,NULL);
     }
   }
 }
@@ -1176,7 +1203,16 @@ static void coop_partner_row(const Ppu *ppu,const Raster *r,int y,MmxRenderView 
         const MmxSpriteAsset *beam=MmxRenderAssetsChargedBuster(group,ram[d+23]&127);
         if(beam) asset=beam;
       }
-      sprite(ppu,zero?r:&partner_raster,s.x,s.y,s.attr,s.size,y,view,objects,false,asset,s.tile,colors,true,false,false);
+      EarthXContext earth = {0};
+      const EarthXContext *earth_style = NULL;
+      if (!zero && MmxZeroEnabled() && (d == 0xba8 || armor)) {
+        earth.object = d;
+        earth.origin_x = (int16_t)(word(ram,0xbad)-view_camera(ram,0x1e4d));
+        earth.origin_y = (int16_t)(word(ram,0xbb0)-view_camera(ram,0x1e50));
+        earth.facing_left = (ram[0xbb9] & 64) != 0;
+        earth_style = &earth;
+      }
+      sprite(ppu,zero?r:&partner_raster,s.x,s.y,s.attr,s.size,y,view,objects,false,asset,s.tile,colors,true,false,false,earth_style);
     }
   }
 }
@@ -1213,7 +1249,7 @@ static void coop_meter_row(const Ppu *ppu,const Raster *r,int y,MmxRenderView vi
       attr|=0x8000;
     }
     sprite(ppu,r,x,sy,attr|tile,16,y,view,
-        objects,false,art,tile,colors,true,false,false);
+        objects,false,art,tile,colors,true,false,false,NULL);
   }
 }
 static void coop_inverted_badge_row(const Ppu *ppu,const Raster *r,int y,MmxRenderView view,
@@ -1223,7 +1259,7 @@ static void coop_inverted_badge_row(const Ppu *ppu,const Raster *r,int y,MmxRend
   /* Use the meter's own frame/palette for the top cap. Replace only the
    * upright symbol panel, leaving its sides continuous with the meter. */
   sprite(ppu,r,x,icon_y,0xb086|(palette<<9),16,y,view,objects,false,
-      frame_art,0x86,colors,true,false,false);
+      frame_art,0x86,colors,true,false,false,NULL);
   int row=y-icon_y;
   int panel_bottom=palette==3?14:13;
   if(row<3 || row>panel_bottom) return;
@@ -1261,7 +1297,7 @@ static void coop_hud_row(const Ppu *ppu,const Raster *r,int y,MmxRenderView view
     coop_meter_row(ppu,r,y,view,objects,colors,x,hp,frame.ram[0x1f9a],2,NULL,icon_y,inverted);
     if(inverted) coop_inverted_badge_row(ppu,r,y,view,objects,colors,x,icon_y,2,NULL,NULL,NULL,true);
     else sprite(ppu,r,x,icon_y,0x3486,16,y,view,objects,false,NULL,0,colors,true,
-        player->character==MMX_COOP_ZERO,false);
+        player->character==MMX_COOP_ZERO,false,NULL);
     unsigned page=player->weapons.page;
     unsigned weapon=page?player->weapons.weapon:player->body[0x33]/2;
     if(!weapon || weapon>8) continue; /* Keep this seat's reserved blank column. */
@@ -1275,7 +1311,7 @@ static void coop_hud_row(const Ppu *ppu,const Raster *r,int y,MmxRenderView view
       coop_inverted_badge_row(ppu,r,y,view,objects,colors,x+16,icon_y,3,palette?&bar:NULL,
           native,page?MmxWeaponsHudIcon(page,weapon):NULL,false);
     } else if(!page) {
-      sprite(ppu,r,x+16,icon_y,0x3620,16,y,view,objects,false,native,0x20,colors,true,false,false);
+      sprite(ppu,r,x+16,icon_y,0x3620,16,y,view,objects,false,native,0x20,colors,true,false,false,NULL);
     } else {
       const MmxWeaponPose *icon=MmxWeaponsHudIcon(page,weapon);int row=y-icon_y;
       if(icon && palette && row>=0 && row<16) for(int col=0;col<16;++col) {
@@ -1411,7 +1447,7 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
     for (int i = (int)waiting_count - 1; i >= 0; --i) {
       Piece s = waiting[i];
       const MmxSpriteAsset *asset = s.animation == 0x53 ? waiting_zero : NULL;
-      sprite(&p, r, s.x, s.y, s.attr, s.size, y, view, objects, true, asset, s.tile, object_colors, true, false, false);
+      sprite(&p, r, s.x, s.y, s.attr, s.size, y, view, objects, true, asset, s.tile, object_colors, true, false, false,NULL);
     }
     bool replaced[128] = {false};
     bool zero_drawn[2] = {false,false};
@@ -1555,7 +1591,18 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
         const MmxSpriteAsset *beam=MmxRenderAssetsChargedBuster(s.animation,piece_pose(&s));
         if(beam) asset=beam;
       }
-      sprite(&p, r, s.x, s.y, attr, s.size, y, view, objects, !center, asset, s.tile, object_colors, true, false, red_ready || red_death);
+      EarthXContext earth = {0};
+      const EarthXContext *earth_style = NULL;
+      if (stage && MmxZeroEnabled() && frame_zero.active_x &&
+          (s.object == 0xba8 || s.object == 0xc38 || s.object == 0xc58 || s.object == 0xc78) &&
+          !red_ready && !red_death) {
+        earth.object = s.object;
+        earth.origin_x = (int16_t)(word(frame.ram,0xbad)-view_camera(frame.ram,0x1e4d));
+        earth.origin_y = (int16_t)(word(frame.ram,0xbb0)-view_camera(frame.ram,0x1e50));
+        earth.facing_left = (frame.ram[0xbb9] & 64) != 0;
+        earth_style = &earth;
+      }
+      sprite(&p, r, s.x, s.y, attr, s.size, y, view, objects, !center, asset, s.tile, object_colors, true, false, red_ready || red_death,earth_style);
     }
     if (stage) coop_partner_row(&p,r,y,view,objects,object_colors);
     int bar_first = -1, bar_count = 0;
@@ -1600,7 +1647,7 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
         }
         continue;
       }
-      sprite(&p, r, x, sy, attr, size, y, view, objects, false, NULL, 0, object_colors, false, zero_icon, false);
+      sprite(&p, r, x, sy, attr, size, y, view, objects, false, NULL, 0, object_colors, false, zero_icon, false,NULL);
     }
     if (charge && zero_drawn[0] && !swapping) {
       int zx=(int16_t)(word(frame.ram,0xbad)-view_camera(frame.ram,0x1e4d));

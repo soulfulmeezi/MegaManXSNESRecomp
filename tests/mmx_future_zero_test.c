@@ -6,6 +6,7 @@
 #include "mmx_zero_jupiter_shell.h"
 #include "mmx_zero_jupiter_planet.h"
 #include "mmx_cpu_safe_follow.h"
+#include "mmx_x_earth_sections.h"
 static uint16_t rgb(unsigned r,unsigned g,unsigned b) {
   return (uint16_t)(r|(g<<5)|(b<<10));
 }
@@ -186,6 +187,32 @@ static void jupiter_planet_masks_replace_sprite_panels(void) {
   assert(MmxJupiterPlanetPaintable(24,palette));
   assert(!MmxJupiterPlanetBrightArmor(palette[19])); /* black undersuit */
 }
+static void x_earth_armor_is_section_local(void) {
+  uint16_t blue=rgb(4,10,27);
+  assert(MmxEarthXArmorPixel(blue,MMX_EARTH_CHEST,0,0)!=blue);
+  assert(MmxEarthXArmorPixel(rgb(24,16,11),MMX_EARTH_CHEST,0,0)==rgb(24,16,11)); /* skin */
+  assert(MmxEarthXArmorPixel(rgb(3,3,4),MMX_EARTH_CHEST,0,0)==rgb(3,3,4)); /* undersuit */
+  assert(MmxEarthXArmorPixel(rgb(27,27,29),MMX_EARTH_CHEST,0,0)==rgb(27,27,29)); /* trim */
+  assert(MmxEarthXArmorPixel(rgb(3,14,4),MMX_EARTH_CHEST,0,0)==rgb(3,14,4)); /* green detail */
+  assert(MmxEarthXArmorPixel(blue,MMX_EARTH_SECTION_COUNT,0,0)==blue);
+  assert(MmxEarthXFaceDetail(0xba8,MMX_EARTH_HELMET,7,-18));
+  assert(!MmxEarthXFaceDetail(0xba8,MMX_EARTH_HELMET,2,-18));
+  assert(!MmxEarthXFaceDetail(0xc38,MMX_EARTH_HELMET,7,-18));
+
+  bool distinct_sections=false, has_ocean=false, has_land=false, has_cloud=false, has_storm=false;
+  for(int y=-36;y<=36;++y) for(int x=-28;x<=28;++x) {
+    uint16_t helmet=MmxEarthXArmorPixel(blue,MMX_EARTH_HELMET,x,y);
+    uint16_t chest=MmxEarthXArmorPixel(blue,MMX_EARTH_CHEST,x,y);
+    if(helmet!=chest) distinct_sections=true;
+    if(helmet==MmxEarthRgb(2,8,19) || helmet==MmxEarthRgb(3,13,25) || helmet==MmxEarthRgb(6,18,30)) has_ocean=true;
+    unsigned r=helmet&31,g=(helmet>>5)&31,b=(helmet>>10)&31;
+    if(g>b && g>=15) has_land=true;
+    if(r>=17 && g>=25 && b>=29) has_cloud=true;
+    if(r==29 && g==30 && b==31) has_storm=true;
+    assert(MmxEarthXArmorPixel(blue,MMX_EARTH_HELMET,x,y)==helmet); /* pose-stable */
+  }
+  assert(distinct_sections && has_ocean && has_land && has_cloud && has_storm);
+}
 static void no_rush_and_camera_are_continuous(void) {
   assert(MmxCpuSafeFollowLimit(false)==224);
   assert(MmxCpuSafeFollowLimit(true)==288);
@@ -219,8 +246,9 @@ int main(void) {
   jupiter_cloud_belts_are_pose_local();
   jupiter_shell_is_clouds_not_metal();
   jupiter_planet_masks_replace_sprite_panels();
+  x_earth_armor_is_section_local();
   no_rush_and_camera_are_continuous();
   vertical_jump_has_no_horizontal_input();
-  puts("Jupiter planet shell & safe-follow: 6 test groups passed");
+  puts("Jupiter planet shell, Earth X & safe-follow: 7 test groups passed");
   return 0;
 }
