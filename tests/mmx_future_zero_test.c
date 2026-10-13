@@ -4,6 +4,7 @@
 #include "mmx_future_zero_color.h"
 #include "mmx_zero_jupiter_stripes.h"
 #include "mmx_zero_jupiter_shell.h"
+#include "mmx_zero_jupiter_planet.h"
 #include "mmx_cpu_safe_follow.h"
 static uint16_t rgb(unsigned r,unsigned g,unsigned b) {
   return (uint16_t)(r|(g<<5)|(b<<10));
@@ -68,6 +69,54 @@ static void jupiter_shell_is_clouds_not_metal(void) {
   /* Same Zero-pose coordinate gives same color, independently of camera. */
   assert(cloud==MmxJovianShellColor(silver,silver,50,30,20,37));
 }
+static void jupiter_planet_masks_replace_sprite_panels(void) {
+  uint8_t sprite[MMX_JUPITER_POSE_PIXELS]={0},mask[MMX_JUPITER_POSE_PIXELS];
+  uint16_t palette[128]={0};
+  palette[16]=rgb(29,28,26); /* silver metal */
+  palette[17]=rgb(23,15,4);  /* golden armor / hair */
+  palette[18]=rgb(31,18,13); /* skin */
+  palette[19]=rgb(3,3,3);    /* black undersuit */
+  palette[20]=rgb(2,21,5);   /* green gem */
+  palette[21]=rgb(24,24,24); /* secondary metallic panel */
+  palette[22]=rgb(3,4,24);   /* blue visor / eye */
+  palette[23]=rgb(15,15,15); /* metallic seam */
+  /* A tiny fictional Zero sprite: a head, golden hair and a torso with
+   * two different metal source shades and a black vertical suit panel. */
+  for(unsigned y=20;y<=23;++y) for(unsigned x=58;x<=67;++x)
+    sprite[y*128+x]=17;
+  for(unsigned y=24;y<=29;++y) for(unsigned x=60;x<=65;++x)
+    sprite[y*128+x]=18;
+  sprite[26*128+64]=22;
+  for(unsigned y=38;y<70;++y) for(unsigned x=45;x<81;++x)
+    sprite[y*128+x]=x<62?16:21;
+  for(unsigned y=38;y<70;++y) sprite[y*128+62]=23;
+  for(unsigned y=38;y<70;++y) sprite[y*128+80]=19;
+  sprite[44*128+55]=20;
+  for(unsigned y=82;y<95;++y)for(unsigned x=50;x<60;++x)
+    sprite[y*128+x]=17;
+  unsigned top=0,spot_x=0,spot_y=0;
+  MmxJupiterPlanetMask(sprite,palette,mask,&top,&spot_x,&spot_y);
+  assert(top==20);
+  assert(mask[20*128+60]==0); /* hair remains original */
+  assert(mask[26*128+62]==0); /* skin remains original */
+  assert(mask[26*128+64]==0); /* eye remains original */
+  assert(mask[45*128+80]==0); /* black undersuit remains original */
+  assert(mask[45*128+55]==1); /* green chest detail becomes planet */
+  assert(mask[45*128+50]==1); /* silver metal is now cloud matter */
+  assert(mask[45*128+75]==1); /* both plate shades use one material */
+  assert(mask[45*128+62]==2); /* thin internal metallic seam erased */
+  assert(mask[87*128+54]==1); /* gold boots become Jupiter */
+  uint16_t old1=palette[sprite[45*128+50]],old2=palette[sprite[45*128+75]];
+  uint16_t planet1=MmxJupiterPlanetColor(old1,mask[45*128+50],50,45,top,spot_x,spot_y);
+  uint16_t planet2=MmxJupiterPlanetColor(old2,mask[45*128+75],50,45,top,spot_x,spot_y);
+  assert(planet1==planet2); /* identical clouds despite old plate shades */
+  assert(planet1!=old1);
+  assert(MmxJupiterPlanetColor(palette[19],0,80,45,top,spot_x,spot_y)==palette[19]);
+  assert(MmxJupiterPlanetColor(palette[18],0,62,26,top,spot_x,spot_y)==palette[18]);
+  assert(MmxJupiterPlanetColor(palette[17],0,60,20,top,spot_x,spot_y)==palette[17]);
+  assert(MmxJupiterPlanetColor(0,1,50,45,top,spot_x,spot_y)!=
+         MmxJupiterPlanetColor(0,1,50,53,top,spot_x,spot_y)); /* belts */
+}
 static void no_rush_and_camera_are_continuous(void) {
   assert(MmxCpuSafeFollowLimit(false)==224);
   assert(MmxCpuSafeFollowLimit(true)==288);
@@ -100,8 +149,9 @@ int main(void) {
   jupiter_palette_is_selective();
   jupiter_cloud_belts_are_pose_local();
   jupiter_shell_is_clouds_not_metal();
+  jupiter_planet_masks_replace_sprite_panels();
   no_rush_and_camera_are_continuous();
   vertical_jump_has_no_horizontal_input();
-  puts("Jupiter shell & safe-follow: 5 test groups passed");
+  puts("Jupiter planet shell & safe-follow: 6 test groups passed");
   return 0;
 }
