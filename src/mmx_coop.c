@@ -3234,6 +3234,18 @@ static void cpu_companion_rescue(uint8_t *r) {
   uint16_t x=0,y=0;
   bool safe=MmxCoopFindLanding(r,&x,&y);
   if (safe) {
+    if (getenv("MMX_CPU_TRACE"))
+      fprintf(stderr,
+          "[cpu-relocate] reason=pit-rescue frame=%d from=%d,%d "
+          "to=%u,%u human=%u,%u camera_bottom=%d "
+          "separation=%d hp=%u\n",
+          snes_frame_counter,
+          (int)word(f->body+5),(int)word(f->body+8),
+          (unsigned)x,(unsigned)y,
+          (unsigned)word(h->body+5),(unsigned)word(h->body+8),
+          bottom,
+          (int)word(h->body+5)-(int)word(f->body+5),
+          (unsigned)(f->body[0x27]&127));
     place_other(r,x,y,true);
     cpu_rescue_cooldown=90;
     cpu_companion_reset_motion();
@@ -3340,6 +3352,16 @@ static void begin_scene(uint8_t *r) {
   MmxZeroState *z=&state.players[other].zero;
   z->swap_phase=1;z->swap_tick=z->swap_fraction=0;z->swap_y=0;
   state.scene_owner=(uint8_t)(state.anchor+1);state.scene_phase=1;
+  if (getenv("MMX_CPU_TRACE") && cpu_traversal_active())
+    fprintf(stderr,
+        "[cpu-teleport] reason=script-start frame=%d "
+        "stage=%u mode=%u/%u/%u anchor=%u partner=%u "
+        "pos=%u,%u\n",
+        snes_frame_counter,(unsigned)r[0x1f7a],
+        (unsigned)r[0xd1],(unsigned)r[0xd2],(unsigned)r[0xd3],
+        (unsigned)state.anchor,(unsigned)other,
+        (unsigned)word(state.players[other].body+5),
+        (unsigned)word(state.players[other].body+8));
   TRACE(SCENE,0,1,state.scene_owner,NULL);
   sound(r,0x0f);
 }
@@ -3413,6 +3435,15 @@ static bool scene_tick(uint8_t *r) {
   if(!vile_capture(r) && !r[0x1f0c] && !r[0xc16] && !r[0x1f23] && !r[0x1f13] && !r[0x1f48] && r[0x1f10]<6 && r[0xd3]==4) {
     uint16_t x,y;
     if(!MmxCoopFindLanding(r,&x,&y)) return false;
+    if (getenv("MMX_CPU_TRACE") && cpu_traversal_active())
+      fprintf(stderr,
+          "[cpu-teleport] reason=script-return frame=%d "
+          "from=%u,%u to=%u,%u human=%u,%u\n",
+          snes_frame_counter,
+          (unsigned)word(p->body+5),(unsigned)word(p->body+8),
+          (unsigned)x,(unsigned)y,
+          (unsigned)word(state.players[state.anchor].body+5),
+          (unsigned)word(state.players[state.anchor].body+8));
     place_other(r,x,y,true);p=&state.players[state.anchor^1];
     p->zero.swap_phase=4;p->zero.swap_y=(int16_t)(word(r+0x1e50)-(int)y-40);
     state.scene_phase=3;sound(r,0x0e);r[0xb9d]=r[0xba0]=0;return true;
