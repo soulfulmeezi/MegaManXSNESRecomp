@@ -20,9 +20,9 @@ static bool jupiter_stripes_enabled;
 static bool jupiter_shell_enabled;
 static bool jupiter_planet_enabled;
 static uint8_t *jupiter_planet_masks;
-static uint8_t jupiter_planet_top[MMX_ZERO_POSES];
-static uint8_t jupiter_planet_spot_x[MMX_ZERO_POSES];
-static uint8_t jupiter_planet_spot_y[MMX_ZERO_POSES];
+static uint8_t jupiter_planet_section_count[MMX_ZERO_POSES];
+static MmxJupiterPlanetSection
+    jupiter_planet_sections[MMX_ZERO_POSES][MMX_JUPITER_MAX_SECTIONS];
 static uint8_t saber_bounds[40];
 static uint8_t hud_tiles[128];
 static uint16_t hud_colors[16];
@@ -171,12 +171,11 @@ bool MmxZeroLoad(const char *path) {
     if(!jupiter_planet_masks) jupiter_planet_enabled=false;
     else for(unsigned pose=0;pose<MMX_ZERO_POSES;++pose) {
       size_t offset=(size_t)pose*MMX_ZERO_WIDTH*MMX_ZERO_HEIGHT;
-      unsigned top,spot_x,spot_y;
+      unsigned section_count;
       MmxJupiterPlanetMask(poses+offset,original_colors,
-          jupiter_planet_masks+offset,&top,&spot_x,&spot_y);
-      jupiter_planet_top[pose]=(uint8_t)top;
-      jupiter_planet_spot_x[pose]=(uint8_t)spot_x;
-      jupiter_planet_spot_y[pose]=(uint8_t)spot_y;
+          jupiter_planet_masks+offset,jupiter_planet_sections[pose],
+          &section_count);
+      jupiter_planet_section_count[pose]=(uint8_t)section_count;
     }
   }
   /* Scan each pose's actual source colors to locate the face and the top of
@@ -231,9 +230,9 @@ bool MmxZeroLoad(const char *path) {
   return true;
 }
 const uint16_t *MmxZeroColors(void) { return colors; }
-/* Draw-time Jupiter texture: replace only strongly red-dominant armor
- * material pixels. Blade/charge particles, hair, eyes, skin and other colors
- * keep their original draw path. Independent from AI, saves and SNES CGRAM. */
+/* Draw-time Jupiter texture: apply the cached per-section cloud surface only
+ * to labeled armor pixels. Blade/charge particles, hair, eyes, skin and the
+ * undersuit keep their original path. Independent of AI and SNES CGRAM. */
 uint16_t MmxZeroJupiterStripeColor(const uint8_t *pose,
     unsigned pixel, unsigned col, unsigned row, uint16_t base) {
   if (!(jupiter_planet_enabled || jupiter_shell_enabled || jupiter_stripes_enabled) ||
@@ -246,9 +245,9 @@ uint16_t MmxZeroJupiterStripeColor(const uint8_t *pose,
   unsigned id=(unsigned)((at-start)/stride);
   if (jupiter_planet_enabled && jupiter_planet_masks) {
     unsigned mask=jupiter_planet_masks[id*stride+(size_t)row*MMX_ZERO_WIDTH+col];
+    if(mask>jupiter_planet_section_count[id])return base;
     return MmxJupiterPlanetColor(base,mask,col,row,
-        jupiter_planet_top[id],jupiter_planet_spot_x[id],
-        jupiter_planet_spot_y[id]);
+        jupiter_planet_sections[id]);
   }
   if (jupiter_shell_enabled) {
     /* Keep the face, its light eye highlights, and the adjacent visor

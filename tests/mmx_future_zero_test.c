@@ -72,6 +72,7 @@ static void jupiter_shell_is_clouds_not_metal(void) {
 static void jupiter_planet_masks_replace_sprite_panels(void) {
   uint8_t sprite[MMX_JUPITER_POSE_PIXELS]={0},mask[MMX_JUPITER_POSE_PIXELS];
   uint16_t palette[128]={0};
+  MmxJupiterPlanetSection sections[MMX_JUPITER_MAX_SECTIONS]={0};
   palette[16]=rgb(29,28,26); /* silver metal */
   palette[17]=rgb(23,15,4);  /* golden armor / hair */
   palette[18]=rgb(31,18,13); /* skin */
@@ -80,42 +81,105 @@ static void jupiter_planet_masks_replace_sprite_panels(void) {
   palette[21]=rgb(24,24,24); /* secondary metallic panel */
   palette[22]=rgb(3,4,24);   /* blue visor / eye */
   palette[23]=rgb(12,12,12); /* interior metallic seam */
-  /* A tiny fictional Zero sprite: a head, golden hair and a torso with
-   * two different metal source shades and a black vertical suit panel. */
+  /* A tiny fictional Zero pose: separate helmet, chest, shoulder, forearm,
+   * thigh and boot plates, all in the original indexed 16-bit style. */
   for(unsigned y=20;y<=23;++y) for(unsigned x=58;x<=67;++x)
     sprite[y*128+x]=17;
   for(unsigned y=24;y<=29;++y) for(unsigned x=60;x<=65;++x)
     sprite[y*128+x]=18;
   sprite[26*128+64]=22;
-  for(unsigned y=38;y<70;++y) for(unsigned x=45;x<81;++x)
+  for(unsigned y=21;y<=25;++y) for(unsigned x=52;x<=56;++x)
+    sprite[y*128+x]=16; /* helmet */
+  for(unsigned y=38;y<=46;++y) for(unsigned x=40;x<=49;++x)
+    sprite[y*128+x]=16; /* left shoulder */
+  for(unsigned y=38;y<=46;++y) for(unsigned x=79;x<=88;++x)
+    sprite[y*128+x]=21; /* right shoulder */
+  for(unsigned y=38;y<=69;++y) for(unsigned x=53;x<=74;++x)
     sprite[y*128+x]=x<62?16:21;
-  for(unsigned y=38;y<70;++y) sprite[y*128+62]=23;
-  for(unsigned y=38;y<70;++y) sprite[y*128+80]=19;
+  for(unsigned y=38;y<=69;++y) sprite[y*128+63]=23;
+  for(unsigned y=38;y<=69;++y) sprite[y*128+80]=19;
   sprite[44*128+55]=20;
-  for(unsigned y=82;y<95;++y)for(unsigned x=50;x<60;++x)
+  for(unsigned y=52;y<=64;++y) for(unsigned x=38;x<=45;++x)
+    sprite[y*128+x]=16; /* left forearm */
+  for(unsigned y=52;y<=64;++y) for(unsigned x=83;x<=90;++x)
+    sprite[y*128+x]=21; /* right forearm */
+  for(unsigned y=73;y<=82;++y) for(unsigned x=52;x<=60;++x)
+    sprite[y*128+x]=16; /* left thigh */
+  for(unsigned y=73;y<=82;++y) for(unsigned x=66;x<=74;++x)
+    sprite[y*128+x]=21; /* right thigh */
+  for(unsigned y=87;y<=98;++y)for(unsigned x=51;x<=60;++x)
     sprite[y*128+x]=17;
-  unsigned top=0,spot_x=0,spot_y=0;
-  MmxJupiterPlanetMask(sprite,palette,mask,&top,&spot_x,&spot_y);
-  assert(top==20);
+  for(unsigned y=87;y<=98;++y)for(unsigned x=66;x<=75;++x)
+    sprite[y*128+x]=17;
+  unsigned section_count=0;
+  MmxJupiterPlanetMask(sprite,palette,mask,sections,&section_count);
   assert(mask[20*128+60]==0); /* hair remains original */
   assert(mask[26*128+62]==0); /* skin remains original */
   assert(mask[26*128+64]==0); /* eye remains original */
   assert(mask[45*128+80]==0); /* black undersuit remains original */
-  assert(mask[45*128+55]==1); /* green chest detail becomes planet */
-  assert(mask[45*128+50]==1); /* silver metal is now cloud matter */
-  assert(mask[45*128+75]==1); /* both plate shades use one material */
-  assert(mask[45*128+62]==2); /* thin internal metallic seam erased */
-  assert(mask[87*128+54]==1); /* gold boots become Jupiter */
-  uint16_t old1=palette[sprite[45*128+50]],old2=palette[sprite[45*128+75]];
-  uint16_t planet1=MmxJupiterPlanetColor(old1,mask[45*128+50],50,45,top,spot_x,spot_y);
-  uint16_t planet2=MmxJupiterPlanetColor(old2,mask[45*128+75],50,45,top,spot_x,spot_y);
+  unsigned chest=mask[45*128+55];
+  unsigned helmet=mask[23*128+54],shoulder=mask[41*128+44];
+  unsigned forearm=mask[58*128+40],thigh=mask[77*128+56];
+  unsigned boot=mask[91*128+55];
+  assert(chest && helmet && shoulder && forearm && thigh && boot);
+  assert(mask[45*128+53]==chest && mask[45*128+70]==chest);
+  assert(mask[45*128+63]==chest); /* enclosed seam joins its plate */
+  assert(mask[41*128+80]!=chest && mask[58*128+86]!=chest &&
+         mask[77*128+70]!=chest && boot!=chest);
+  assert(section_count>=10); /* separated armor patches have separate IDs */
+  assert(sections[chest-1].flags&MMX_JUPITER_SECTION_CHEST);
+  assert(!(sections[helmet-1].flags&MMX_JUPITER_SECTION_CHEST));
+  assert(sections[chest-1].pattern_seed!=sections[shoulder-1].pattern_seed);
+  assert(sections[boot-1].flags&MMX_JUPITER_SECTION_BOOT);
+  assert(sections[boot-1].flags&MMX_JUPITER_SECTION_SWIRL);
+  uint16_t old1=palette[16],old2=palette[21];
+  uint16_t planet1=MmxJupiterPlanetColor(old1,mask[45*128+55],55,45,sections);
+  uint16_t planet2=MmxJupiterPlanetColor(old2,mask[45*128+55],55,45,sections);
   assert(planet1==planet2); /* identical clouds despite old plate shades */
   assert(planet1!=old1);
-  assert(MmxJupiterPlanetColor(palette[19],0,80,45,top,spot_x,spot_y)==palette[19]);
-  assert(MmxJupiterPlanetColor(palette[18],0,62,26,top,spot_x,spot_y)==palette[18]);
-  assert(MmxJupiterPlanetColor(palette[17],0,60,20,top,spot_x,spot_y)==palette[17]);
-  assert(MmxJupiterPlanetColor(0,1,50,45,top,spot_x,spot_y)!=
-         MmxJupiterPlanetColor(0,1,50,53,top,spot_x,spot_y)); /* belts */
+  assert(MmxJupiterPlanetColor(palette[19],0,80,45,sections)==palette[19]);
+  assert(MmxJupiterPlanetColor(palette[18],0,62,26,sections)==palette[18]);
+  assert(MmxJupiterPlanetColor(palette[17],0,60,20,sections)==palette[17]);
+  assert(MmxJupiterPlanetColor(0,chest,60,45,sections)!=
+         MmxJupiterPlanetColor(0,chest,60,53,sections)); /* local belts */
+  assert(MmxJupiterPlanetColor(0,chest,64,53,sections)==
+         MmxFutureZeroBgr555(28,10,4)); /* red-orange Great Red Spot */
+  assert(MmxJupiterPlanetColor(0,chest,65,53,sections)==
+         MmxFutureZeroBgr555(30,22,14)); /* lighter spot swirl */
+  assert(sections[shoulder-1].flags&MMX_JUPITER_SECTION_SWIRL);
+  assert(MmxJupiterPlanetColor(0,shoulder,sections[shoulder-1].center_x,
+      sections[shoulder-1].center_y-2,sections)==
+      MmxFutureZeroBgr555(30,29,27)); /* white storm on another plate */
+  bool dark_boot_band=false;
+  for(unsigned y=sections[boot-1].top;y<=sections[boot-1].bottom;++y)
+    for(unsigned x=sections[boot-1].left;x<=sections[boot-1].right;++x)
+      if(mask[y*128+x]==boot && MmxJupiterPlanetColor(0,boot,x,y,sections)==
+          MmxFutureZeroBgr555(11,6,4)) dark_boot_band=true;
+  assert(dark_boot_band); /* boots use darker brown belts */
+  const unsigned armor_sections[]={helmet,chest,shoulder,forearm,thigh,boot};
+  for(unsigned n=0;n<sizeof(armor_sections)/sizeof(armor_sections[0]);++n) {
+    unsigned id=armor_sections[n];
+    bool is_boot=(sections[id-1].flags&MMX_JUPITER_SECTION_BOOT)!=0;
+    uint16_t cream=is_boot?MmxFutureZeroBgr555(27,26,24):
+        MmxFutureZeroBgr555(29,28,26);
+    uint16_t tan=is_boot?MmxFutureZeroBgr555(24,20,15):
+        MmxFutureZeroBgr555(26,22,17);
+    uint16_t rust=is_boot?MmxFutureZeroBgr555(22,13,7):
+        MmxFutureZeroBgr555(24,16,10);
+    uint16_t brown=is_boot?MmxFutureZeroBgr555(11,6,4):
+        MmxFutureZeroBgr555(15,9,5);
+    bool has_cream=false,has_tan=false,has_rust=false,has_brown=false;
+    const MmxJupiterPlanetSection *s=&sections[id-1];
+    for(unsigned y=s->top;y<=s->bottom;++y)
+      for(unsigned x=s->left;x<=s->right;++x) if(mask[y*128+x]==id) {
+        uint16_t c=MmxJupiterPlanetColor(0,id,x,y,sections);
+        if(c==cream)has_cream=true;
+        if(c==tan)has_tan=true;
+        if(c==rust)has_rust=true;
+        if(c==brown)has_brown=true;
+      }
+    assert(has_cream && has_tan && has_rust && has_brown);
+  }
 }
 static void no_rush_and_camera_are_continuous(void) {
   assert(MmxCpuSafeFollowLimit(false)==224);
