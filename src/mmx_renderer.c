@@ -9,6 +9,7 @@
 #include "mmx_coop_view.h"
 #include "mmx_x_earth_sections.h"
 #include "mmx_cosmic.h"
+#include "mmx_hover_traffic.h"
 #include <math.h>
 
 /* Mode-1 decode/composition follows SuperMetroidRecomp's sm_renderer.c.
@@ -974,30 +975,16 @@ static void moved_enemy_row(const MmxWeaponShot *s,const Ppu *p,const Raster *r,
   }
 }
 typedef struct CosmicLight { int x,y; unsigned power,kind; } CosmicLight;
-typedef struct LowerCar { int x,y; unsigned depth,reverse,variant,layer; } LowerCar;
+typedef MmxHoverCar LowerCar;
 static unsigned lower_traffic(LowerCar cars[32],MmxRenderView view,unsigned tick) {
   unsigned count=0;
-  /* Sample the actual road spans at each car's depth: this follows the
-   * diagonal perspective in the screenshot instead of a screen-wide lane. */
-  for(unsigned stream=0;stream<4;++stream) {
-    unsigned travel=(tick/2+stream*17)%52;
-    unsigned depth=(stream&1)?51-travel:travel;
-    int y=166+(int)depth;
-    const Raster *r=frame.lines+y;Ppu p;memcpy(&p,r->registers,PPU_SAVESTATE_REGS_SIZE);
-    for(unsigned layer=0;layer<2;++layer) {
-      if(!((p.screenEnabled[0]|p.screenEnabled[1])&(1<<layer))) continue;
-      int start=-view.extra;
-      for(int x=-view.extra;x<=view.width-view.extra;++x) {
-        int color=-1;unsigned tile=x<view.width-view.extra?background(&p,r,layer,x,y+1,true,&color):0;
-        bool road=tile && MmxLowerRoadColor(color>=0?(uint16_t)color:r->palette[tile&255]);
-        if(road) continue;
-        int width=x-start;
-        if(width>=14 && count<32) {
-          int center=start+(width>=26?width*((stream&1)?2:1)/3:width/2);
-          cars[count++]=(LowerCar){center,y,depth,stream&1,stream+(unsigned)(center+view.extra)/32,layer};
-        }
-        start=x+1;
-      }
+  int camera_x=view_camera(frame.ram,0x1e4d),camera_y=view_camera(frame.ram,0x1e50);
+  for(unsigned lane=0;lane<MMX_HOVER_LANES;++lane) {
+    for(unsigned slot=0;slot<MMX_HOVER_PER_LANE;++slot) {
+      LowerCar car=MmxHoverPosition(lane,slot,tick);
+      car.x-=camera_x;car.y-=camera_y;
+      if(car.x<-view.extra-16 || car.x>=view.width-view.extra+16 || car.y<0 || car.y>=240) continue;
+      cars[count++]=car;
     }
   }
   return count;
@@ -1767,8 +1754,8 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
         if(activity>=0) bg_colors[1]=activity;
       }
       for(unsigned i=0;i<car_count;++i) {
-        const LowerCar *car=cars+i;unsigned layer=car->layer;
-        int pixel=MmxLowerCarPixel(x-car->x,y-car->y,car->depth,car->reverse,car->variant);
+        const LowerCar *car=cars+i;unsigned layer=0;
+        int pixel=MmxHoverPixel(car,x-car->x,y-car->y);
         if(pixel<0 || !bg[layer]) continue;
         /* Use the untouched road pixel for occlusion, not a fire/light color. */
         int native_color=-1;unsigned tile=background(&p,r,layer,x,y+1,true,&native_color);

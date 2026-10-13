@@ -3,6 +3,7 @@
 #include "mmx_zero.h"
 #include "mmx_weapon_combat.h"
 #include "mmx_cosmic.h"
+#include "mmx_hover_traffic.h"
 #include "mmx_knc_bugfix.h"
 #include <assert.h>
 #include <math.h>
@@ -1270,10 +1271,32 @@ static void cosmic_combat(void) {
   assert(MmxLowerRoadColor(MmxCosmicRgb(5,9,7)));
   assert(!MmxLowerRoadColor(MmxCosmicRgb(15,24,13))); /* Pillar. */
   assert(!MmxLowerRoadColor(MmxCosmicRgb(10,7,10))); /* Sky. */
-  assert(MmxLowerCarPixel(0,3,30,0,0)>=0);
-  assert(MmxLowerCarPixel(10,3,30,0,0)<0);
-  for(int y=0;y<10;++y) for(int x=-4;x<=4;++x)
-    assert(MmxLowerCarPixel(x,y,30,0,1)==MmxLowerCarPixel(x,9-y,30,1,1));
+  for(unsigned lane=0;lane<MMX_HOVER_LANES;++lane) {
+    const MmxHoverLane *p=&mmx_hover_lanes[lane];
+    for(unsigned tick=0;tick<MMX_HOVER_CYCLE*2;++tick) {
+      for(unsigned slot=0;slot<MMX_HOVER_PER_LANE;++slot) {
+        MmxHoverCar car=MmxHoverPosition(lane,slot,tick);
+        int cross=(car.x-p->fx)*(p->ny-p->fy)-(car.y-p->fy)*(p->nx-p->fx);
+        assert(abs(cross)<=abs(p->nx-p->fx)+abs(p->ny-p->fy)); /* <1px rounding */
+        assert(car.depth<MMX_HOVER_CYCLE && car.phase<8 && car.model<4);
+        for(unsigned other=slot+1;other<MMX_HOVER_PER_LANE;++other) {
+          MmxHoverCar next=MmxHoverPosition(lane,other,tick);
+          assert(abs(car.y-next.y)>34); /* Full scaled sprite bounds cannot overlap. */
+        }
+      }
+    }
+  }
+  for(unsigned model=0;model<4;++model) for(unsigned dir=0;dir<5;++dir) {
+    unsigned pixels=0,changed=0;
+    MmxHoverCar car={0};car.model=model;car.direction=dir;car.depth=1151;
+    for(int y=-16;y<=16;++y) for(int x=-16;x<=16;++x) {
+      car.phase=0;int a=MmxHoverPixel(&car,x,y);car.phase=4;int b=MmxHoverPixel(&car,x,y);
+      pixels+=a>=0;changed+=a!=b;
+      assert(a<32768 && b<32768);
+    }
+    assert(pixels>55 && changed>1);
+    assert(MmxHoverPixel(&car,30,0)==-1);
+  }
   assert(MmxCosmicLightStrength(-8,8,9)==1);
   assert(MmxCosmicLightStrength(12,0,9)==0);
   assert(MmxCosmicLightStrength(0,24,9)==0);
