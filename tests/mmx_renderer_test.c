@@ -1255,8 +1255,18 @@ static void cosmic_combat(void) {
   }
   assert(clouds && traffic && windows && motion && lower_street);
   assert(MmxCityActivityPixel(58,224,0,0)<0);
-  assert(MmxCosmicShotPixel(MMX_EARTH_WAVE,1,0,-24)>=0);
-  assert(MmxCosmicLightStrength(0,0,9)==9);
+  /* The silhouette must animate at a fixed origin, not merely translate. */
+  for(unsigned kind=1;kind<=2;++kind) for(unsigned age=1;age<32;age+=2) {
+    unsigned shape_changes=0,pixels=0;
+    for(int y=-28;y<=19;++y) for(int x=-24;x<=24;++x) {
+      int a=MmxCosmicShotPixel(kind,age,x,y),b=MmxCosmicShotPixel(kind,age+2,x,y);
+      assert(a<32768 && b<32768);
+      pixels+=a>=0;shape_changes+=(a>=0)!=(b>=0);
+      assert(a==MmxCosmicShotPixel(kind,age,x,y)); /* Save/rewind deterministic. */
+    }
+    assert(pixels>=25 && shape_changes>=8);
+  }
+  assert(MmxCosmicLightStrength(0,0,9)==3);
   assert(MmxLowerRoadColor(MmxCosmicRgb(5,9,7)));
   assert(!MmxLowerRoadColor(MmxCosmicRgb(15,24,13))); /* Pillar. */
   assert(!MmxLowerRoadColor(MmxCosmicRgb(10,7,10))); /* Sky. */
@@ -1264,7 +1274,9 @@ static void cosmic_combat(void) {
   assert(MmxLowerCarPixel(10,3,30,0,0)<0);
   for(int y=0;y<10;++y) for(int x=-4;x<=4;++x)
     assert(MmxLowerCarPixel(x,y,30,0,1)==MmxLowerCarPixel(x,9-y,30,1,1));
-  assert(MmxCosmicLightStrength(-8,8,9)==8);
+  assert(MmxCosmicLightStrength(-8,8,9)==1);
+  assert(MmxCosmicLightStrength(12,0,9)==0);
+  assert(MmxCosmicLightStrength(0,24,9)==0);
   assert(MmxCosmicLightStrength(90,90,9)==0);
   for(unsigned c=0;c<32768;++c) {
     assert(MmxCosmicLitColor((uint16_t)c,0,0,0)==c);
@@ -1273,7 +1285,7 @@ static void cosmic_combat(void) {
   assert(MmxCosmicLitColor(0,9,0,3)==MmxCosmicRgb(9,18,18));
   assert(MmxCosmicLitColor(0,0,9,3)==MmxCosmicRgb(18,18,9));
   assert(MmxCosmicShotPixel(MMX_EARTH_WAVE,1,11,0)<0);
-  assert(MmxCosmicShotPixel(MMX_JUPITER_STORM,1,0,17)<0);
+  assert(MmxCosmicShotPixel(MMX_JUPITER_STORM,1,0,20)<0);
   MmxWeaponsCancelShots(ram);MmxWeaponsSetCombatState((MmxWeaponCombatState){0});
 }
 static void zero_blink_submission(void) {

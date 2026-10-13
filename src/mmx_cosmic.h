@@ -19,40 +19,58 @@ static inline uint16_t MmxCosmicRgb(unsigned r,unsigned g,unsigned b) {
 static inline int MmxCosmicShotPixel(unsigned kind,unsigned age,int x,int y) {
   if(kind==MMX_EARTH_WAVE) {
     if(x < -24 || x > 12 || y < -28 || y > 9) return -1;
-    /* A breaking ridge of stone, a blue-white rim and a trailing dust wake.
-     * x points forward; the renderer mirrors the entire effect with travel. */
-    if(x>=-10 && x<=10) {
-      static const int8_t ridge[21]={-1,-4,-3,-7,-10,-9,-15,-14,-20,-26,-25,-20,-18,-21,-16,-11,-9,-8,-4,-5,-1};
-      int crest=ridge[x+10]+(int)((age/4)&1);
-      if(y>=crest && y<=crest+2) return MmxCosmicRgb(28,31,31);
-      if(y>crest+2 && y<crest+6) return MmxCosmicRgb(4,23,25);
-      if(y>=crest+6 && y<=7) {
-        if(((x+32)/4+(y+32)/5)%3==0) return MmxCosmicRgb(5,12,15);
-        return y<0?MmxCosmicRgb(14,20,15):MmxCosmicRgb(21,19,12);
-      }
+    /* A crest rolls backward through the advancing wave. The silhouette,
+     * interior ribbons and ballistic fragments all animate independently. */
+    static const uint8_t swell[16]={0,1,3,6,10,15,20,24,26,24,20,15,10,6,3,1};
+    unsigned phase=age&31;
+    if(x>=-18 && x<=10) {
+      unsigned index=(unsigned)(x+32+(int)phase)/2&15;
+      int crest=5-(int)swell[index];
+      if(y>=crest && y<crest+2) return MmxCosmicRgb(27,31,31);
+      if(y>=crest+2 && y<crest+5) return MmxCosmicRgb(3,23,24);
+      /* Open moving ribbons replace the solid triangular slab. */
+      unsigned stream=(unsigned)(y*2+x+96+(int)age*3)&15;
+      if(y>=crest+5 && y<=7 && stream<4) return MmxCosmicRgb(5,16,18);
+      if(y>=crest+5 && y<=7 && stream==4) return MmxCosmicRgb(15,27,24);
     }
-    if(x<-8) {
-      int rise=(int)((age+(unsigned)(-x)*3)%16),dust=-x-8;
-      if(y==5-rise && dust%5<3) return MmxCosmicRgb(25,26,20);
-      if(y>=6 && y<=8 && ((x+(int)age)&7)<5) return MmxCosmicRgb(9,18,19);
+    for(unsigned i=0;i<5;++i) {
+      int t=(int)((age+i*7)%20),px=10-t*2+(int)(i&1)*3;
+      int py=5-t*2+t*t/12+(int)(i&1)*2;
+      int size=t<10?2:1;
+      if(x>=px && x<px+size && y>=py && y<py+size)
+        return (t&2)?MmxCosmicRgb(23,21,14):MmxCosmicRgb(13,16,11);
     }
+    if(y>=6 && y<=8 && ((x+(int)age*2)&7)<5) return MmxCosmicRgb(9,22,21);
   } else if(kind==MMX_JUPITER_STORM) {
-    if(x < -9 || x > 9 || y < -16 || y > 16) return -1;
-    int ay=y<0?-y:y;
-    int arc=7-ay*ay/32;
-    if(x==arc || x==arc-1) return MmxCosmicRgb(31,30,26);
-    if(x==arc-2 || x==arc-3) return MmxCosmicRgb(30,15,6);
-    int bolt=(y+18)/4%2? -3:1;
-    if(x==bolt && ((age/2)&1)) return MmxCosmicRgb(26,29,31);
+    if(x < -20 || x > 13 || y < -19 || y > 19) return -1;
+    static const int8_t radius[8]={13,15,17,18,17,15,13,12};
+    static const int8_t lean[8]={-2,-1,0,1,2,1,0,-1};
+    unsigned phase=(age/2)&7;
+    int yy=y-lean[phase],ay=yy<0?-yy:yy;
+    int arc=8-ay*ay/(radius[phase]+9)+lean[phase];
+    unsigned flow=(unsigned)(y+32+(int)age*2)&15;
+    int thickness=2+(int)((phase+2)%3);
+    if(ay<=radius[phase]) {
+      if(x==arc || (x==arc-1 && flow<11)) return MmxCosmicRgb(31,30,26);
+      if(x<arc && x>=arc-thickness) return flow<6?MmxCosmicRgb(28,20,12):MmxCosmicRgb(30,13,5);
+      if(x==arc-thickness-3 && flow<9) return MmxCosmicRgb(18,20,24);
+      int bolt=-5+(int)((unsigned)(y+24)/3+phase)%3*3;
+      if(x==bolt && flow<7) return MmxCosmicRgb(23,28,31);
+    }
+    /* Shed sparks peel backward from the changing upper/lower tips. */
+    int t=(int)(age%8);
+    if(x==-7-t && (y==radius[phase]-t || y==-radius[phase]+t))
+      return MmxCosmicRgb(31,24,16);
   }
   return -1;
 }
 /* Quantized SNES lighting, with no timer independent of saved combat state. */
 static inline unsigned MmxCosmicLightStrength(int dx,int dy,unsigned power) {
-  unsigned ax=(unsigned)(dx<0?-dx:dx),ay=(unsigned)(dy<0?-dy:dy);
+  unsigned ax=(unsigned)(dx<0?-dx:dx)*2,ay=(unsigned)(dy<0?-dy:dy);
   unsigned distance=ax>ay?ax+ay/2:ay+ax/2;
-  unsigned falloff=distance/8;
-  return power>falloff?power-falloff:0;
+  unsigned falloff=distance/4;
+  if(power>6) power=6;
+  return power>falloff?(power-falloff+1)/2:0;
 }
 static inline uint16_t MmxCosmicLitColor(uint16_t base,unsigned earth,unsigned storm,unsigned shade) {
   unsigned values[3];

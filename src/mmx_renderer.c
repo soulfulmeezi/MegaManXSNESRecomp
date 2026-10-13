@@ -1010,7 +1010,7 @@ static unsigned cosmic_lights(CosmicLight *lights,unsigned count,const uint8_t *
       const MmxWeaponShot *s=combat->shots+i;
       if(!s->active || s->page!=MMX_COSMIC_PAGE || !s->age || s->age>=48) continue;
       power=s->age<5?s->age+4:s->age>39?48-s->age:9;
-      kind=s->weapon;x=s->x>>8;y=s->y>>8;
+      kind=s->weapon;x=s->x>>8;y=(s->y>>8)-(kind==MMX_EARTH_WAVE?8:0);
     } else {
       if(!MmxZeroStormSlash(zero) || zero->slash<7 || zero->slash>31) continue;
       power=zero->slash<12?zero->slash-4:zero->slash>23?32-zero->slash:8+zero->combo;
@@ -1030,7 +1030,7 @@ static void weapon_effects_row(const MmxWeaponCombatState *combat,const Ppu *p,c
     if (!s->active || !s->age) continue;
     if(s->page==MMX_COSMIC_PAGE) {
       int cy=(s->y>>8)-view_camera(frame.ram,0x1e50);
-      int row=y-cy;if(row < -28 || row>16) continue;
+      int row=y-cy;if(row < -28 || row>19) continue;
       int cx=(s->x>>8)-view_camera(frame.ram,0x1e4d);
       for(int col=-24;col<=24;++col) {
         int color=MmxCosmicShotPixel(s->weapon,s->age,s->facing?col:-col,row);
@@ -1482,7 +1482,7 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
             frame.lines[0].palette + 128 + ((s->attr >> 9) & 7) * 16)))) piece_assets[i] = a;
   }
   int16_t crystal_ripple[224];MmxWeaponsTimeRipple(&frame_weapon_combat,crystal_ripple);
-  CosmicLight lights[18];unsigned light_count=0,scene_shade=0;
+  CosmicLight lights[18];unsigned light_count=0;
   LowerCar cars[32];unsigned car_count=stage && MmxZeroEnabled() &&
       frame.ram[0x1f7a]==0 && frame.ram[0xd3]==4?
       lower_traffic(cars,view,frame_weapon_combat.tick):0;
@@ -1493,10 +1493,6 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
         frame_coop.players[frame_coop.current^1].status==MMX_COOP_ALIVE) {
       const MmxCoopPlayer *partner=&frame_coop.players[frame_coop.current^1];
       light_count=cosmic_lights(lights,light_count,partner_ram,&partner->zero,&partner->combat,view);
-    }
-    for(unsigned i=0;i<light_count;++i) {
-      unsigned shade=lights[i].power>=6?3:lights[i].power/2;
-      if(shade>scene_shade) scene_shade=shade;
     }
   }
   if (frame_coop.initialized && MmxWeaponsTimePhase(&frame_coop.players[frame_coop.current^1].combat)==1 &&
@@ -1790,7 +1786,7 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
          * Text/HUD and actor palette silhouettes stay crisp over the light. */
         for(unsigned layer=0;layer<2;++layer) if(bg[layer]) {
           uint16_t base=bg_colors[layer]>=0?(uint16_t)bg_colors[layer]:r->palette[bg[layer]&255];
-          bg_colors[layer]=MmxCosmicLitColor(base,earth,storm,scene_shade);
+          bg_colors[layer]=MmxCosmicLitColor(base,earth,storm,0);
         }
       }
       if (palette_fade) {
