@@ -2,6 +2,7 @@
 #include "mmx_future_zero_color.h"
 #include "mmx_zero_jupiter_stripes.h"
 #include "mmx_zero_jupiter_shell.h"
+#include "mmx_zero_jupiter_planet.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,6 +18,11 @@ static uint8_t face_top[MMX_ZERO_POSES],face_bottom[MMX_ZERO_POSES];
 static uint8_t face_left[MMX_ZERO_POSES],face_right[MMX_ZERO_POSES];
 static bool jupiter_stripes_enabled;
 static bool jupiter_shell_enabled;
+static bool jupiter_planet_enabled;
+static uint8_t *jupiter_planet_masks;
+static uint8_t jupiter_planet_top[MMX_ZERO_POSES];
+static uint8_t jupiter_planet_spot_x[MMX_ZERO_POSES];
+static uint8_t jupiter_planet_spot_y[MMX_ZERO_POSES];
 static uint8_t saber_bounds[40];
 static uint8_t hud_tiles[128];
 static uint16_t hud_colors[16];
@@ -108,6 +114,8 @@ void MmxZeroDisable(void) {
   free(charge_poses); charge_poses = NULL;
   jupiter_stripes_enabled = false;
   jupiter_shell_enabled = false;
+  jupiter_planet_enabled = false;
+  free(jupiter_planet_masks); jupiter_planet_masks = NULL;
 }
 bool MmxZeroLoad(const char *path) {
   FILE *f = path ? fopen(path, "rb") : NULL;
@@ -157,6 +165,20 @@ bool MmxZeroLoad(const char *path) {
   memcpy(original_colors,colors,sizeof(original_colors));
   jupiter_stripes_enabled = !getenv("MMX_ZERO_CLASSIC_RED") && !getenv("MMX_ZERO_NO_STRIPES");
   jupiter_shell_enabled = !getenv("MMX_ZERO_CLASSIC_RED") && !getenv("MMX_ZERO_NO_SHELL");
+  jupiter_planet_enabled = !getenv("MMX_ZERO_CLASSIC_RED") && !getenv("MMX_ZERO_NO_PLANET");
+  if(jupiter_planet_enabled) {
+    jupiter_planet_masks=malloc(size);
+    if(!jupiter_planet_masks) jupiter_planet_enabled=false;
+    else for(unsigned pose=0;pose<MMX_ZERO_POSES;++pose) {
+      size_t offset=(size_t)pose*MMX_ZERO_WIDTH*MMX_ZERO_HEIGHT;
+      unsigned top,spot_x,spot_y;
+      MmxJupiterPlanetMask(poses+offset,original_colors,
+          jupiter_planet_masks+offset,&top,&spot_x,&spot_y);
+      jupiter_planet_top[pose]=(uint8_t)top;
+      jupiter_planet_spot_x[pose]=(uint8_t)spot_x;
+      jupiter_planet_spot_y[pose]=(uint8_t)spot_y;
+    }
+  }
   /* Scan each pose's actual source colors to locate the face and the top of
    * its colored armor silhouette. The cached anchors follow running, jump
    * and wall-kick animations; no guest RAM, ROM or sprite art is changed. */
@@ -214,13 +236,20 @@ const uint16_t *MmxZeroColors(void) { return colors; }
  * keep their original draw path. Independent from AI, saves and SNES CGRAM. */
 uint16_t MmxZeroJupiterStripeColor(const uint8_t *pose,
     unsigned pixel, unsigned col, unsigned row, uint16_t base) {
-  if (!(jupiter_shell_enabled || jupiter_stripes_enabled) || !poses || !pose ||
+  if (!(jupiter_planet_enabled || jupiter_shell_enabled || jupiter_stripes_enabled) ||
+      !poses || !pose ||
       pixel<16 || pixel>=32 || col>=MMX_ZERO_WIDTH || row>=MMX_ZERO_HEIGHT) return base;
   const size_t stride=(size_t)MMX_ZERO_WIDTH*MMX_ZERO_HEIGHT;
   const uintptr_t start=(uintptr_t)poses, at=(uintptr_t)pose;
   const size_t length=(size_t)MMX_ZERO_POSES*stride;
   if (at<start || at-start>=length || (at-start)%stride) return base;
   unsigned id=(unsigned)((at-start)/stride);
+  if (jupiter_planet_enabled && jupiter_planet_masks) {
+    unsigned mask=jupiter_planet_masks[id*stride+(size_t)row*MMX_ZERO_WIDTH+col];
+    return MmxJupiterPlanetColor(base,mask,col,row,
+        jupiter_planet_top[id],jupiter_planet_spot_x[id],
+        jupiter_planet_spot_y[id]);
+  }
   if (jupiter_shell_enabled) {
     /* Keep the face, its light eye highlights, and the adjacent visor
      * pixels unaltered. The original facial skin itself is also excluded
