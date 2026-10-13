@@ -1,5 +1,6 @@
 #include "mmx_zero.h"
 #include "mmx_future_zero_color.h"
+#include "mmx_zero_jupiter_stripes.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,6 +9,9 @@ static uint8_t *poses;
 static uint8_t *charge_poses;
 static uint16_t charge_colors[3][16];
 static uint16_t colors[128];
+static uint16_t original_colors[128];
+static uint8_t stripe_top[MMX_ZERO_POSES];
+static bool jupiter_stripes_enabled;
 static uint8_t saber_bounds[40];
 static uint8_t hud_tiles[128];
 static uint16_t hud_colors[16];
@@ -97,6 +101,7 @@ void MmxZeroDisable(void) {
   MmxZeroResetState();
   free(poses); poses = NULL;
   free(charge_poses); charge_poses = NULL;
+  jupiter_stripes_enabled = false;
 }
 bool MmxZeroLoad(const char *path) {
   FILE *f = path ? fopen(path, "rb") : NULL;
@@ -143,6 +148,23 @@ bool MmxZeroLoad(const char *path) {
   memcpy(hud_tiles, hud, sizeof(hud_tiles));
   for (unsigned i = 0; i < 16; ++i) hud_colors[i] = (uint16_t)(word(hud + 128 + 2 * i) & 0x7fff);
   for (unsigned i = 0; i < 128; ++i) colors[i] = (uint16_t)(word(palette + 2 * i) & 0x7fff);
+  memcpy(original_colors,colors,sizeof(original_colors));
+  jupiter_stripes_enabled = !getenv("MMX_ZERO_CLASSIC_RED") && !getenv("MMX_ZERO_NO_STRIPES");
+  /* Cache the start of each frame's real red-armor silhouette. This anchors
+   * the cloud belts to the POSE, not the camera/screen; no sprite indices
+   * or SNES graphics memory are modified. */
+  if (jupiter_stripes_enabled) for(unsigned pose=0;pose<MMX_ZERO_POSES;++pose) {
+    size_t offset=(size_t)pose*MMX_ZERO_WIDTH*MMX_ZERO_HEIGHT;
+    unsigned top=0; bool found=false;
+    for(unsigned y=0;y<MMX_ZERO_HEIGHT && !found;++y)
+      for(unsigned x=0;x<MMX_ZERO_WIDTH;++x) {
+        unsigned pixel=poses[offset+(size_t)y*MMX_ZERO_WIDTH+x];
+        if(pixel>=16 && pixel<32 && MmxFutureZeroIsRedArmor(original_colors[pixel])) {
+          top=y; found=true; break;
+        }
+      }
+    stripe_top[pose]=(uint8_t)top;
+  }
   /* Host-side Jupiter Zero palette, first pass only. Repaint his original
    * saturated-red armor colors into cream, tan, rust and brown cloud tones,
    * preserving sprite shape, poses, hair, skin, gem and X's art.
@@ -162,6 +184,20 @@ bool MmxZeroLoad(const char *path) {
   return true;
 }
 const uint16_t *MmxZeroColors(void) { return colors; }
+/* Draw-time Jupiter texture: replace only strongly red-dominant armor
+ * material pixels. Blade/charge particles, hair, eyes, skin and other colors
+ * keep their original draw path. Independent from AI, saves and SNES CGRAM. */
+uint16_t MmxZeroJupiterStripeColor(const uint8_t *pose,
+    unsigned pixel, unsigned col, unsigned row, uint16_t base) {
+  if (!jupiter_stripes_enabled || !poses || !pose ||
+      pixel<16 || pixel>=32 || col>=MMX_ZERO_WIDTH || row>=MMX_ZERO_HEIGHT) return base;
+  const size_t stride=(size_t)MMX_ZERO_WIDTH*MMX_ZERO_HEIGHT;
+  const uintptr_t start=(uintptr_t)poses, at=(uintptr_t)pose;
+  const size_t length=(size_t)MMX_ZERO_POSES*stride;
+  if (at<start || at-start>=length || (at-start)%stride) return base;
+  unsigned id=(unsigned)((at-start)/stride);
+  return MmxZeroJupiterStripePixel(original_colors[pixel],base,col,row,stripe_top[id]);
+}
 bool MmxZeroHasChargeArt(void) { return charge_poses != NULL; }
 const uint16_t *MmxZeroBodyColors(const MmxZeroState *s) {
   if (!charge_poses || !s || s->active_x || s->swap_phase || s->slash ||
