@@ -26,7 +26,7 @@ static void jupiter_palette_is_selective(void) {
   assert(MmxFutureZeroJupiter(rgb(10,0,0))==rgb(10,0,0)); /* too dark */
 }
 static void jupiter_cloud_belts_are_pose_local(void) {
-  uint16_t red=rgb(31,5,3), base=MmxFutureZeroJupiter(red);
+  uint16_t red=rgb(25,4,3), base=MmxFutureZeroJupiter(red);
   /* Stripe coloring really changes individual sprite pixels: neighboring
    * horizontal bands get different cloud-belt colors from the same index. */
   uint16_t cream=MmxZeroJupiterStripePixel(red,base,0,30,30);
