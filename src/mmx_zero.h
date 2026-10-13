@@ -44,6 +44,9 @@ int MmxZeroPoseOffsetY(const uint8_t ram[0x20000]);
 const uint8_t *MmxZeroPose(const uint8_t ram[0x20000], const MmxZeroState *snapshot);
 const uint8_t *MmxZeroBlade(const MmxZeroState *snapshot);
 const uint16_t *MmxZeroColors(void);
+/* Per-pixel Jupiter cloud belts: called only while drawing Zero's armor. */
+uint16_t MmxZeroJupiterStripeColor(const uint8_t *pose,
+    unsigned pixel, unsigned col, unsigned row, uint16_t base);
 const uint16_t *MmxZeroBodyColors(const MmxZeroState *snapshot);
 const uint8_t *MmxZeroChargePose(const MmxZeroState *snapshot);
 bool MmxZeroHasChargeArt(void);
