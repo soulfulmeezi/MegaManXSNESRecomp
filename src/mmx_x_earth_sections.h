@@ -45,33 +45,33 @@ static inline int MmxEarthIsBlueArmor(uint16_t color) {
 static inline char MmxEarthXMaterial(unsigned section, int x, int y) {
   static const char maps[MMX_EARTH_SECTION_COUNT][12][13] = {
     { /* Helmet: broad northern land, tapering into a southern peninsula. */
-      "............", "..GGGG......", ".GGTTGG.....", ".GGTTGGG....",
-      "..GGGGGG....", "...GGGG.....", "....GGG.....", ".....GGG....",
+      "......CC....", "..GGGG..CC..", ".GGTTGG.....", ".GGTTGGG....",
+      "..GGGGGG....", "...GGGG.....", "....GGG.CC..", ".....GGG..C.",
       "......GG....", ".CC...GG....", "...CC.......", "............"
     },
     { /* Chest: the largest connected land silhouette is the focal point. */
-      "............", "..GGGG......", ".GGTTGGG....", ".GGTTGGG....",
-      "..GGGGG.....", "...GGG......", "....GGGG....", "....GTTGG...",
+      ".......CC...", "..GGGG...CC.", ".GGTTGGG....", ".GGTTGGG....",
+      "..GGGGG.....", ".CCGGG......", "...CGGGG....", "....GTTGG...",
       ".....GGGG...", "......GG....", ".CC....G.CC.", "...C........"
     },
     { /* Shoulder: a wide continent wraps over the cap. */
       "............", "....CC......", "..CC........", "..GGGGGG....",
       ".GGGTTGGG...", ".GGTTTGGGG..", "..GGGGGGG...", "...GGG.GG...",
-      "....GG......", ".....G......", "............", "............"
+      "....GG...CC.", ".....G.CC...", "..CC........", "....C......."
     },
     { /* Forearm: a single long coast, with a short offshore cloud. */
       "............", "...GGGG.....", "..GGTGGG....", "..GTTGGG....",
-      "..GGGGGG....", "...GGGG.....", "....GGG.....", "....GGGG....",
+      "..GGGGGG.CC.", "...GGGG.C...", ".CC.GGG.....", "...CGGGG....",
       ".....GG.....", "......G.CC..", ".......C....", "............"
     },
     { /* Thigh: a rounded landmass and a narrow southern tip. */
-      "............", "....GGG.....", "...GGTTG....", "..GGTTTGG...",
-      "..GGGGGGG...", "...GGGGGG...", "....GGGG....", ".....GGG....",
+      ".CC.........", "...CGGG.....", "...GGTTG....", "..GGTTTGG...",
+      "..GGGGGGG.CC", "...GGGGGGC..", "....GGGG....", ".....GGG....",
       "......GG....", ".CC....G....", "...CC.......", "............"
     },
     { /* Boot: deep ocean around a continuous coast, no white ice blocks. */
-      "............", "..GGG.......", ".GGTTGG.....", ".GGTTGGG....",
-      "..GGGGGG....", "...GGGGG....", "....GGGG....", ".....GGGG...",
+      "......CC....", "..GGG...CC..", ".GGTTGG.....", ".GGTTGGG....",
+      "..GGGGGG....", ".CCGGGGG....", "...CGGGG....", ".....GGGG...",
       "......GGG...", ".......GG...", "..CC....G...", "....C......."
     }
   };
@@ -101,8 +101,8 @@ static inline uint16_t MmxEarthXArmorPixel(uint16_t original,
         shade == 1 ? MmxEarthRgb(6, 19, 9) : MmxEarthRgb(11, 24, 12);
     case 'T': return shade == 0 ? MmxEarthRgb(13, 12, 6) :
         shade == 1 ? MmxEarthRgb(20, 18, 9) : MmxEarthRgb(25, 23, 13);
-    case 'C': return shade == 0 ? MmxEarthRgb(17, 23, 25) :
-        shade == 1 ? MmxEarthRgb(24, 28, 30) : MmxEarthRgb(28, 30, 31);
+    case 'C': return shade == 0 ? MmxEarthRgb(21, 25, 27) :
+        shade == 1 ? MmxEarthRgb(27, 29, 30) : MmxEarthRgb(30, 31, 31);
     default: return shade == 0 ? MmxEarthRgb(1, 5, 13) :
         shade == 1 ? MmxEarthRgb(2, 10, 21) : MmxEarthRgb(5, 16, 26);
   }

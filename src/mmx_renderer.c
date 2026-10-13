@@ -8,6 +8,7 @@
 #include "mmx_weapon_combat.h"
 #include "mmx_coop_view.h"
 #include "mmx_x_earth_sections.h"
+#include "mmx_cosmic.h"
 #include <math.h>
 
 /* Mode-1 decode/composition follows SuperMetroidRecomp's sm_renderer.c.
@@ -977,6 +978,17 @@ static void weapon_effects_row(const MmxWeaponCombatState *combat,const Ppu *p,c
   for (unsigned i=0;i<24;++i) {
     const MmxWeaponShot *s=i<8 ? combat->shots+i : combat->effects+i-8;
     if (!s->active || !s->age) continue;
+    if(s->page==MMX_COSMIC_PAGE) {
+      int cy=(s->y>>8)-view_camera(frame.ram,0x1e50);
+      int row=y-cy;if(row < -16 || row>16) continue;
+      int cx=(s->x>>8)-view_camera(frame.ram,0x1e4d);
+      for(int col=-10;col<=10;++col) {
+        int color=MmxCosmicShotPixel(s->weapon,s->age,s->facing?col:-col,row);
+        int dx=cx+col+view.extra;
+        if(color>=0 && dx>=0 && dx<view.width) {objects[dx]=0xe681;object_colors[dx]=color;}
+      }
+      continue;
+    }
     if(i<8 && s->page==1 && s->weapon==1 && !s->charged &&
         s->muzzle_pose>=1 && s->muzzle_pose<=4)
       moved_enemy_row(s,p,r,y,view,objects,object_colors);
@@ -1162,7 +1174,7 @@ static void coop_partner_row(const Ppu *ppu,const Raster *r,int y,MmxRenderView 
         objects[dest] = (uint16_t)(priority|0x680|(pixel&15));
         uint16_t base=pixel>=16 && pixel<32 ?
             MmxZeroBodyColors(&partner->zero)[pixel-16] : MmxZeroColors()[pixel];
-        colors[dest]=blade_pixel ? base :
+        colors[dest]=blade_pixel ? MmxZeroStormBladeColor(&partner->zero,base) :
             MmxZeroJupiterStripeColor(body,pixel,(unsigned)col,(unsigned)row,base);
       }
       if (charge && charge[row*128+col] && dest>=0 && dest<view.width) {
@@ -1562,6 +1574,7 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
                       MmxZeroBodyColors(&frame_zero)[pixel - 16] : colors[pixel];
                   object_colors[dx]=menu_body || pilot || blade_pixel ? base :
                       MmxZeroJupiterStripeColor(body,pixel,(unsigned)col,(unsigned)row,base);
+                  if(blade_pixel) object_colors[dx]=MmxZeroStormBladeColor(&frame_zero,base);
                 }
               }
             }
@@ -1682,6 +1695,13 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
         if (p.mosaic & (1 << layer)) { int size = (p.mosaic >> 4) + 1;
           bx -= ((bx % size) + size) % size; by -= by % size; }
         bg[layer] = background(&p, r, layer, bx, by, stage, &bg_colors[layer]);
+      }
+      if(stage && frame.ram[0x1f7a]==0 && frame.ram[0xd3]==4 &&
+          MmxZeroEnabled() && bg[1]) {
+        uint16_t base=bg_colors[1]>=0?(uint16_t)bg_colors[1]:r->palette[bg[1]&255];
+        int activity=MmxCityActivityPixel(x+view_camera(frame.ram,0x1e4d)/8,y,
+            frame_weapon_combat.tick,base);
+        if(activity>=0) bg_colors[1]=activity;
       }
       if (palette_fade) {
         for (int layer = 0; layer < 3; ++layer) if (bg_colors[layer] >= 0)

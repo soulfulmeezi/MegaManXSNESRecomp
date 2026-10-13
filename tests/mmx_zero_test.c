@@ -64,8 +64,7 @@ static void modern_checks(void) {
   assert(MmxZeroHitbox(ram,0xe68,s.projectile,0xffb0)==0);
   for (unsigned i=0;i<9;++i) tick(64,0);
   assert(MmxZeroGetState().modern.hit_phase==1);
-  assert(MmxZeroHitbox(ram,0xe68,s.projectile,0xffb0)==0xffb0);
-  assert(MmxZeroDamage(ram,0xe68,s.projectile,3)==3);
+  assert(MmxZeroHitbox(ram,0xe68,s.projectile,0xffb0)==0);
   assert(MmxZeroDamage(ram,0xe68,s.projectile,3)==0);
   for (unsigned i=0;i<40;++i) tick(64,0);
   assert(!MmxZeroGetState().slash && !ram[s.projectile] && !MmxZeroGetState().charge);
@@ -93,6 +92,40 @@ static void modern_checks(void) {
   memcpy(before,ram,sizeof(ram)); MmxZeroMovementTick(ram); tick(ram[0xbdf],ram[0xbe3]);
   assert(!memcmp(before,ram,sizeof(ram))); /* X remains native. */
   MmxZeroSetModern(false); MmxZeroResetState(); player();
+}
+static unsigned storm_count;
+static void storm(uint8_t *r) { assert(r==ram); ++storm_count; }
+static void storm_combo_checks(void) {
+  MmxZeroSetStormEmitter(storm);
+  for(unsigned modern=0;modern<2;++modern) {
+    MmxZeroSetModern(modern!=0); MmxZeroResetState(); player();storm_count=0;
+    tick(modern?64:68,64);
+    for(unsigned swing=0;swing<3;++swing) {
+      MmxZeroState s=MmxZeroGetState();
+      assert(s.slash==1 && s.combo==swing && MmxZeroStormSlash(&s));
+      while(MmxZeroGetState().slash<7) tick(0,0);
+      s=MmxZeroGetState();
+      assert(MmxZeroDamage(ram,0xe68,s.projectile,128)==128);
+      assert(MmxZeroDamage(ram,0xe68,s.projectile,3)==(swing==2?6:swing==1?4:3));
+      assert(MmxZeroDamage(ram,0xe68,s.projectile,3)==0);
+      assert(storm_count==(swing==2));
+      /* Restore preserves the contact mask and one-time finisher marker. */
+      s=MmxZeroGetState();assert(MmxZeroValidState(&s));
+      MmxZeroResetState();MmxZeroSetState(s);tick(0,0);
+      assert(storm_count==(swing==2));
+      if(swing<2) {
+        tick(64,64);
+        unsigned timeout=60;
+        while(MmxZeroGetState().combo==swing && --timeout) tick(0,0);
+        assert(timeout);
+      }
+    }
+    for(unsigned i=0;i<60;++i) tick(64,0);
+    assert(!MmxZeroGetState().slash && storm_count==1);
+    player();tick(modern?64:68,64);ram[0xbaa]=0x0e;tick(0,0);
+    assert(!MmxZeroGetState().slash); /* Hurt interrupts safely. */
+  }
+  MmxZeroSetStormEmitter(NULL);MmxZeroSetModern(false);MmxZeroResetState();player();
 }
 int main(void) {
   player(); memcpy(before, ram, sizeof(ram));
@@ -281,6 +314,7 @@ int main(void) {
   assert(MmxZeroActive()); /* A saved character wins over the start choice. */
   MmxZeroSetStartCharacter(false); MmxZeroResetState(); assert(MmxZeroActive());
   modern_checks();
+  storm_combo_checks();
   MmxZeroDisable(); MmxZeroSetCollisionRom(rom,sizeof(rom));
   assert(!memcmp(rom,clean,sizeof(rom)));
   remove("zero-test.bin"); remove("zero-test-bad.bin");

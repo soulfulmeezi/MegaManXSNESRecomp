@@ -200,7 +200,7 @@ static void x_earth_armor_is_section_local(void) {
   assert(!MmxEarthXFaceDetail(0xc38,MMX_EARTH_HELMET,7,-18));
 
   /* Every native-size plate has one connected continent, an ocean majority,
-   * a small tan interior and at most 5% clouds. Large maps used to pass broad
+   * a small tan interior and thin clouds covering 6-9% of the plate. Large maps used to pass broad
    * area scans while leaving actual plates blue or almost entirely white. */
   for(unsigned section=0;section<MMX_EARTH_SECTION_COUNT;++section) {
     unsigned land=0,cloud=0,dry=0,head=0,tail=0;
@@ -226,7 +226,7 @@ static void x_earth_armor_is_section_local(void) {
         assert(r+g+b>previous); previous=r+g+b;
       }
     }
-    assert(land>=36 && land<=70 && dry>=2 && dry<=8 && cloud>=3 && cloud<=7);
+    assert(land>=36 && land<=70 && dry>=2 && dry<=8 && cloud>=9 && cloud<=12);
     /* Flood-fill the periodic chart so an origin offset does not split a
      * connected coastline at the sample window boundary. */
     while(head<tail) {

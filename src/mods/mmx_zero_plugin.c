@@ -135,17 +135,15 @@ static void hook(CpuState *cpu, uint32_t pc) {
     }
     case 0x049e76: {
       unsigned original = cpu_read8(cpu, cpu->DB, (uint16_t)(0xef37 + cpu->Y));
-      unsigned base = MmxWeaponsDamage(g_ram, cpu->D, cpu->X,
-          MmxZeroDamage(g_ram, cpu->D, cpu->X, original));
+      unsigned base = original;
       /* Hooked at final enemy damage resolution, shared by native and
-       * imported weapons. Both human and CPU Zero qualify; X does not.
+       * imported weapons. X gains 175%; Zero retains his existing multiplier.
        * Multiply AFTER boss resistance, original hit immunity and the
        * fractional weapon accumulator have been resolved. */
-      unsigned damage=MmxZeroDamageBoost(
-          base,MmxZeroActive(),cpu->D,cpu->X);
+      unsigned damage=MmxWeaponsFinalDamage(g_ram,cpu->D,cpu->X,original);
       if (damage!=base && getenv("MMX_CPU_TRACE"))
         fprintf(stderr,
-            "[zero-damage] enemy=%04x projectile=%04x base=%u boosted=%u\n",
+            "[cosmic-damage] enemy=%04x projectile=%04x base=%u boosted=%u\n",
             (unsigned)cpu->D,(unsigned)cpu->X,base,damage);
       if (damage == original) break;
       /* Post-SBC: retain the interpreter's instruction timing, but recompute
@@ -183,6 +181,7 @@ static bool zero_terrain_solid(const uint8_t *r, int x, int y) {
   return MmxWeaponsTerrainSolid(r, x, y, false, NULL);
 }
 void MmxZeroRegisterHooks(void) {
+  MmxZeroSetStormEmitter(MmxWeaponsJupiterStorm);
   MmxZeroSetTerrainQuery(zero_terrain_solid);
   const unsigned pcs[] = {0x009dca, 0x00d6a7, 0x00d76a, 0x01971f, 0x019796, 0x0198ff,
                           0x01815c, 0x018165, 0x019d47, 0x0194af, 0x00d3e7, 0x00d4f4, 0x00d511, 0x049e1d, 0x049e3a, 0x049e76, 0x049c19, 0x048f07, 0x048eea, 0x018b04, 0x0491dc, 0x02823e,

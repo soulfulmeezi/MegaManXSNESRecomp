@@ -93,3 +93,6 @@ void MmxZeroMovementTick(uint8_t ram[0x20000]);
 void MmxZeroPlayerMotion(uint8_t ram[0x20000], unsigned object);
 void MmxZeroCancel(uint8_t ram[0x20000]);
 void MmxZeroRegisterHooks(void);
+void MmxZeroSetStormEmitter(void (*emit)(uint8_t *));
+bool MmxZeroStormSlash(const MmxZeroState *state);
+uint16_t MmxZeroStormBladeColor(const MmxZeroState *state,uint16_t original);

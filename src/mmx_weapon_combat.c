@@ -1,6 +1,7 @@
 #include "mmx_weapon_combat.h"
 #include "mmx_weapons.h"
 #include "mmx_zero.h"
+#include "mmx_cosmic.h"
 #include <string.h>
 
 static MmxWeaponCombatState combat;
@@ -22,6 +23,7 @@ static void gravity_effect_tick(uint8_t *r,MmxWeaponShot *s);
 static void parasitic_player(uint8_t *r);
 static bool parasitic_contact(uint8_t *r,unsigned enemy,MmxWeaponShot *s);
 static void parasitic_release(uint8_t *r,const MmxWeaponShot *s);
+static void cosmic_player(uint8_t *r);
 _Static_assert(sizeof(MmxWeaponShot) == 40 && offsetof(MmxWeaponCombatState,enemies) == MMX_WEAPON_COMBAT_LEGACY_SIZE &&
     offsetof(MmxWeaponCombatState,effects)==MMX_WEAPON_COMBAT_DAMAGE_SIZE &&
     sizeof(MmxWeaponCombatState) == 1028, "Weapon combat save ABI");
@@ -54,6 +56,14 @@ bool MmxWeaponsValidCombatState(const MmxWeaponCombatState *s) {
       s->enemies[i].hp>127 || s->enemies[i].active>1) return false;
   for (unsigned i = 0; i < 24; ++i) {
     const MmxWeaponShot *p = i<8 ? s->shots+i : s->effects+i-8;
+    if (p->active && p->page==MMX_COSMIC_PAGE) {
+      if(i>=8 || p->active!=1 || p->reserved || p->charged || p->group ||
+          (p->weapon!=MMX_EARTH_WAVE && p->weapon!=MMX_JUPITER_STORM) ||
+          !p->age || p->age>48 || (p->facing && p->facing!=64) ||
+          p->vx != (p->facing?1024:-1024) || p->vy ||
+          p->x<0 || p->x>8192*256 || p->y<0 || p->y>8192*256) return false;
+      continue;
+    }
     if (i>=8 && p->active && !(p->page==2 && p->weapon==6 && p->variant>=2 && p->variant<=3) &&
         !(p->page==2 && p->weapon==8 && !p->charged && p->variant>=3 && p->variant<=4) && (p->page!=1 || p->charged ||
         !((p->weapon==8 && (p->variant==4 || p->variant==5)) || (p->weapon==3 && p->variant==3) ||
@@ -204,7 +214,7 @@ void MmxWeaponsPlayerMotion(uint8_t r[0x20000],unsigned d) {
   r[0xbfa]=s->radius;
 }
 void MmxWeaponsPlayerTick(uint8_t r[0x20000]) {
-  if (!MmxWeaponsEnabled()) return;
+  if (!MmxWeaponsEnabled() && !MmxZeroEnabled()) return;
   /* The native weapon-get actor demonstrates its own X1 weapon, independent
    * of either player's previous imported selection. */
   if(r[0xd1]==2 && r[0xd2]==4 && r[0xd3]>=10) return;
@@ -213,6 +223,7 @@ void MmxWeaponsPlayerTick(uint8_t r[0x20000]) {
     MmxWeaponsCancelShots(r); combat.valid = 1; combat.stage = r[0x1f7a];
   }
   ++combat.tick;
+  cosmic_player(r);
   for (unsigned i=0;i<16;++i) {
     MmxWeaponShot *p=combat.effects+i;if (!p->active) continue;
     if (p->page==2 && p->weapon==6) { gravity_effect_tick(r,p);continue; }
@@ -334,6 +345,11 @@ void MmxWeaponsMarkShot(uint8_t r[0x20000], unsigned d) {
 }
 static void shot_bounds(const MmxWeaponShot *s, unsigned *rx, unsigned *ry) {
   *rx = 13; *ry = 10;
+  if(s->page==MMX_COSMIC_PAGE) {
+    *rx=s->weapon==MMX_EARTH_WAVE?10:9;
+    *ry=s->weapon==MMX_EARTH_WAVE?10:16;
+    return;
+  }
   if (s->page==1 && s->weapon==1) *rx=*ry=s->muzzle_pose==5 ? 24 : 8;
   if (s->page==2 && s->weapon==2) {*rx=s->variant==1?16:s->charged?8:13;*ry=s->variant==1?16:s->charged?9:12;}
   if (s->page==1 && s->weapon==2) *rx=*ry=7;
@@ -1358,12 +1374,16 @@ static void ray_tick(uint8_t *r, unsigned d, MmxWeaponShot *s) {
 #include "mmx_weapon_gravity.inc"
 #include "mmx_weapon_parasitic.inc"
 #include "mmx_weapon_blade.inc"
+#include "mmx_weapon_cosmic.inc"
 unsigned MmxWeaponsProjectileTick(uint8_t r[0x20000], unsigned d, unsigned active) {
   if (!owned(r,d)) {
     if (slot_valid(d)) memset(combat.shots+slot_index(d),0,sizeof(MmxWeaponShot));
     return active;
   }
   MmxWeaponShot *s = combat.shots + slot_index(d);
+  if(s->active && s->page==MMX_COSMIC_PAGE && MmxZeroEnabled()) {
+    cosmic_tick(r,d,s); return 0;
+  }
   if (!MmxWeaponsEnabled() || !s->active) { retire(r,d); return 0; }
   if (s->page == 2 && s->weapon == 2) { parasitic_tick(r,d,s); return 0; }
   if (s->page == 2 && s->weapon == 6) { gravity_tick(r,d,s); return 0; }
@@ -1388,7 +1408,7 @@ void MmxWeaponsCollisionRom(uint8_t *rom, size_t size) {
   collision_rom = rom; collision_rom_size = size; collision_patch = false;
   uint8_t empty[32]; memset(empty,255,32);
   if (!rom || size < 0x37fa0 || (memcmp(rom+0x37f80,empty,32) && memcmp(rom+0x37f80,previous_boxes,32))) return;
-  collision_patch = MmxWeaponsEnabled();
+  collision_patch = MmxWeaponsEnabled() || MmxZeroEnabled();
   memcpy(previous_boxes,empty,32); memcpy(rom+0x37f80,empty,32);
   if (collision_patch) for (unsigned i=0;i<8;++i) collision_box(i,combat.shots+i);
 }
@@ -1396,6 +1416,7 @@ static unsigned enemy_bit(unsigned enemy) {
   return enemy >= 0xe68 && enemy < 0x1228 && (enemy & 63) == 0x28 ? 1u << ((enemy-0xe68)/64) : 0;
 }
 static unsigned source_damage(const MmxWeaponShot *s) {
+  if(s->page==MMX_COSMIC_PAGE) return 6;
   /* Neutral ordinary-enemy rows: X2 $86:F4C8, X3 $86:E55D.
    * Both use buster=3. Classes are determined by the projectile phase,
    * not by the menu ID (Ray children are $1C, Acid droplets are $18).
@@ -1463,6 +1484,11 @@ unsigned MmxWeaponsDamage(uint8_t r[0x20000], unsigned enemy, unsigned d, unsign
   if (s->page==1 && s->weapon==6) chain_contact(r,s,enemy,damage);
   if (s->page==2 && s->weapon==8) fang_contact(r,s,enemy);
   return damage>127 ? 127 : damage;
+}
+unsigned MmxWeaponsFinalDamage(uint8_t r[0x20000], unsigned enemy, unsigned d, unsigned original) {
+  unsigned base=MmxWeaponsDamage(r,enemy,d,MmxZeroDamage(r,enemy,d,original));
+  return MmxEarthDamageBoost(MmxZeroDamageBoost(base,MmxZeroActive(),enemy,d),
+      MmxZeroEnabled() && !MmxZeroActive(),enemy,d);
 }
 unsigned MmxWeaponsHitbox(const uint8_t r[0x20000], unsigned enemy, unsigned d, unsigned original) {
   if (!MmxWeaponsEnemyActive(r,enemy,1) || !MmxWeaponsEnemyActive(r,d,1)) return 0;

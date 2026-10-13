@@ -57,4 +57,6 @@ void MmxWeaponsCollisionRom(uint8_t *rom, size_t size);
  * The actual projectile ID, graphics, hit cadence and movement stay intact. */
 unsigned MmxWeaponsContactClass(const uint8_t *ram,unsigned enemy,unsigned projectile,unsigned original,bool reaction);
 unsigned MmxWeaponsDamage(uint8_t ram[0x20000], unsigned enemy, unsigned projectile, unsigned original);
+unsigned MmxWeaponsFinalDamage(uint8_t ram[0x20000], unsigned enemy, unsigned projectile, unsigned original);
+void MmxWeaponsJupiterStorm(uint8_t ram[0x20000]);
 unsigned MmxWeaponsHitbox(const uint8_t ram[0x20000], unsigned enemy, unsigned projectile, unsigned original);

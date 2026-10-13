@@ -1,6 +1,8 @@
 #include "mmx_renderer.h"
 #include "mmx_render_assets.h"
 #include "mmx_zero.h"
+#include "mmx_weapon_combat.h"
+#include "mmx_cosmic.h"
 #include "mmx_knc_bugfix.h"
 #include <assert.h>
 #include <math.h>
@@ -1197,6 +1199,65 @@ static void earth_x_surface_coordinates(void) {
   }
 }
 
+static void cosmic_combat(void) {
+  memset(ram,0,sizeof(ram));memset(rom_bytes,0,sizeof(rom_bytes));
+  memset(rom_bytes+0x37f80,255,32);MmxWeaponsCollisionRom(rom_bytes,sizeof(rom_bytes));
+  MmxZeroSetStartCharacter(true);MmxZeroResetState();
+  MmxWeaponsSetCombatState((MmxWeaponCombatState){0});
+  ram[0xd1]=2;ram[0xd2]=ram[0xd3]=4;ram[0xba9]=2;ram[0xbcf]=16;
+  ram[0xbd3]=4;ram[0xc11]=64;put_word(0xbad,100);put_word(0xbb0,96);
+  /* One flat floor at y=112, with empty space above it. */
+  put_word(0xb92,0x8000);ram[0xb94]=0x80;rom_bytes[0]=0x13;
+  for(unsigned i=0x2000;i<0x2200;i+=2) put_word(i,1);
+  for(unsigned i=0x20e0;i<0x2100;i+=2) put_word(i,0);
+  ram[0xbdf]=ram[0xbe3]=64;MmxWeaponsPlayerTick(ram);
+  assert(!ram[0x1228] && (ram[0xbe3]&64)); /* Normal Shoot stays native. */
+  assert(MmxWeaponsFinalDamage(ram,0xe68,0x1228,4)==11);
+  assert(MmxWeaponsFinalDamage(ram,0xe68,0x1228,128)==128);
+  ram[0xbdf]=68;ram[0xbe3]=64;MmxWeaponsPlayerTick(ram);
+  MmxWeaponCombatState saved=MmxWeaponsGetCombatState();
+  assert(saved.shots[0].page==MMX_COSMIC_PAGE && saved.shots[0].weapon==MMX_EARTH_WAVE);
+  assert(saved.shots[0].x==118*256 && saved.shots[0].y==102*256);
+  assert(MmxWeaponsValidCombatState(&saved) && !(ram[0xbe3]&64));
+  MmxWeaponsSetCombatState(saved);
+  MmxWeaponCombatState restored=MmxWeaponsGetCombatState();assert(!memcmp(&saved,&restored,sizeof(saved)));
+  ram[0xbe3]=0;MmxWeaponsPlayerTick(ram);MmxWeaponsProjectileTick(ram,0x1228,1);
+  assert(MmxWeaponsGetCombatState().shots[0].x==122*256);
+  assert(MmxWeaponsFinalDamage(ram,0xe68,0x1228,3)==17);
+  assert(MmxWeaponsFinalDamage(ram,0xe68,0x1228,3)==0); /* One hit per victim. */
+  put_word(0x20ee,1);MmxWeaponsPlayerTick(ram);MmxWeaponsProjectileTick(ram,0x1228,1);
+  assert(!ram[0x1228]); /* A gap retires the ground wave. */
+  put_word(0x20ee,0);
+  for(unsigned i=0;i<3;++i) {ram[0xbdf]=68;ram[0xbe3]=64;MmxWeaponsPlayerTick(ram);}
+  saved=MmxWeaponsGetCombatState();assert(saved.shots[0].active && saved.shots[1].active && !saved.shots[2].active);
+  assert(ram[0xbe3]&64); /* Full pool falls back to the normal weapon. */
+  ++ram[0x1f7a];ram[0xbe3]=0;MmxWeaponsPlayerTick(ram);assert(!ram[0x1228] && !ram[0x1268]);
+  MmxZeroSetStartCharacter(false);MmxZeroResetState();
+  MmxWeaponsJupiterStorm(ram);saved=MmxWeaponsGetCombatState();
+  assert(saved.shots[0].weapon==MMX_JUPITER_STORM && MmxWeaponsValidCombatState(&saved));
+  assert(MmxWeaponsFinalDamage(ram,0xe68,0x1228,3)==18);
+  /* A storm arc travels through air, but stops at a solid wall. */
+  put_word(0x20ae,0);MmxWeaponsPlayerTick(ram);MmxWeaponsProjectileTick(ram,0x1228,1);
+  assert(!ram[0x1228]);
+  for(unsigned c=0;c<256;++c) {
+    unsigned expected=c && c<128 ? ((c*11+2)/4>127?127:(c*11+2)/4) : c;
+    assert(MmxEarthDamageBoost(c,1,0xe68,0x1228)==expected);
+    assert(MmxEarthDamageBoost(c,0,0xe68,0x1228)==c);
+    assert(MmxEarthDamageBoost(c,1,0xba8,0x1228)==c);
+  }
+  unsigned clouds=0,traffic=0,windows=0,motion=0;
+  for(int y=0;y<224;++y) for(int x=0;x<256;++x) {
+    uint16_t sky=MmxCosmicRgb(10,7,10);
+    int a=MmxCityActivityPixel(x,y,0,sky),b=MmxCityActivityPixel(x,y,120,sky);
+    clouds+=a>=0 && y<100;traffic+=a>=0 && y>=100;motion+=a!=b;
+    windows+=MmxCityActivityPixel(x,y,0,0)>=0;
+    if(y>=164) assert(a<0);
+  }
+  assert(clouds && traffic && windows && motion);
+  assert(MmxCosmicShotPixel(MMX_EARTH_WAVE,1,11,0)<0);
+  assert(MmxCosmicShotPixel(MMX_JUPITER_STORM,1,0,17)<0);
+  MmxWeaponsCancelShots(ram);MmxWeaponsSetCombatState((MmxWeaponCombatState){0});
+}
 static void zero_blink_submission(void) {
   /* A submitted body belongs to the OAM epoch even if the next player update
    * has already cleared its visibility flag. It must never turn back into X. */
@@ -1250,6 +1311,7 @@ static void zero_blink_submission(void) {
   ppu.oam[32] = 0xe000; MmxRendererLatchSprites(); capture();
   assert(MmxRendererDraw(output,view,false) && output[40 * 256 + 40] == 0);
   earth_x_surface_coordinates();
+  cosmic_combat();
   MmxZeroDisable(); g_mmx_custom_renderer = false; g_mmx_render_asset_repairs = true;
   MmxRendererReset();
 }
