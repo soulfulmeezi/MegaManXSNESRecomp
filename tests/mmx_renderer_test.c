@@ -1245,15 +1245,26 @@ static void cosmic_combat(void) {
     assert(MmxEarthDamageBoost(c,0,0xe68,0x1228)==c);
     assert(MmxEarthDamageBoost(c,1,0xba8,0x1228)==c);
   }
-  unsigned clouds=0,traffic=0,windows=0,motion=0;
+  unsigned clouds=0,traffic=0,windows=0,motion=0,lower_street=0;
   for(int y=0;y<224;++y) for(int x=0;x<256;++x) {
     uint16_t sky=MmxCosmicRgb(10,7,10);
     int a=MmxCityActivityPixel(x,y,0,sky),b=MmxCityActivityPixel(x,y,120,sky);
     clouds+=a>=0 && y<100;traffic+=a>=0 && y>=100;motion+=a!=b;
     windows+=MmxCityActivityPixel(x,y,0,0)>=0;
-    if(y>=164) assert(a<0);
+    lower_street+=a>=0 && y>=164;
   }
-  assert(clouds && traffic && windows && motion);
+  assert(clouds && traffic && windows && motion && lower_street);
+  assert(MmxCityActivityPixel(58,224,0,0)<0);
+  assert(MmxCosmicShotPixel(MMX_EARTH_WAVE,1,0,-24)>=0);
+  assert(MmxCosmicLightStrength(0,0,9)==9);
+  assert(MmxCosmicLightStrength(-8,8,9)==8);
+  assert(MmxCosmicLightStrength(90,90,9)==0);
+  for(unsigned c=0;c<32768;++c) {
+    assert(MmxCosmicLitColor((uint16_t)c,0,0,0)==c);
+    assert(MmxCosmicLitColor((uint16_t)c,10,10,3)<=32767);
+  }
+  assert(MmxCosmicLitColor(0,9,0,3)==MmxCosmicRgb(9,18,18));
+  assert(MmxCosmicLitColor(0,0,9,3)==MmxCosmicRgb(18,18,9));
   assert(MmxCosmicShotPixel(MMX_EARTH_WAVE,1,11,0)<0);
   assert(MmxCosmicShotPixel(MMX_JUPITER_STORM,1,0,17)<0);
   MmxWeaponsCancelShots(ram);MmxWeaponsSetCombatState((MmxWeaponCombatState){0});

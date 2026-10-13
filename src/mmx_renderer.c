@@ -973,6 +973,28 @@ static void moved_enemy_row(const MmxWeaponShot *s,const Ppu *p,const Raster *r,
     } else sprite(p,r,piece.x,piece.y,attr,piece.size,y,view,objects,false,asset,piece.tile,colors,true,false,false,NULL);
   }
 }
+typedef struct CosmicLight { int x,y; unsigned power,kind; } CosmicLight;
+static unsigned cosmic_lights(CosmicLight *lights,unsigned count,const uint8_t *ram,
+    const MmxZeroState *zero,const MmxWeaponCombatState *combat,MmxRenderView view) {
+  for(unsigned i=0;i<9 && count<18;++i) {
+    int x,y;unsigned power,kind;
+    if(i<8) {
+      const MmxWeaponShot *s=combat->shots+i;
+      if(!s->active || s->page!=MMX_COSMIC_PAGE || !s->age || s->age>=48) continue;
+      power=s->age<5?s->age+4:s->age>39?48-s->age:9;
+      kind=s->weapon;x=s->x>>8;y=s->y>>8;
+    } else {
+      if(!MmxZeroStormSlash(zero) || zero->slash<7 || zero->slash>31) continue;
+      power=zero->slash<12?zero->slash-4:zero->slash>23?32-zero->slash:8+zero->combo;
+      kind=MMX_JUPITER_STORM;
+      x=(int)word(ram,0xbad)+(zero->facing?18:-18);y=(int)word(ram,0xbb0)-16;
+    }
+    x-=view_camera(frame.ram,0x1e4d);y-=view_camera(frame.ram,0x1e50);
+    if(x < -view.extra-64 || x>view.width-view.extra+64 || y < -64 || y>288) continue;
+    lights[count++]=(CosmicLight){x,y,power,kind};
+  }
+  return count;
+}
 static void weapon_effects_row(const MmxWeaponCombatState *combat,const Ppu *p,const Raster *r,
                                int y,MmxRenderView view,uint16_t *objects,int *object_colors) {
   for (unsigned i=0;i<24;++i) {
@@ -980,9 +1002,9 @@ static void weapon_effects_row(const MmxWeaponCombatState *combat,const Ppu *p,c
     if (!s->active || !s->age) continue;
     if(s->page==MMX_COSMIC_PAGE) {
       int cy=(s->y>>8)-view_camera(frame.ram,0x1e50);
-      int row=y-cy;if(row < -16 || row>16) continue;
+      int row=y-cy;if(row < -28 || row>16) continue;
       int cx=(s->x>>8)-view_camera(frame.ram,0x1e4d);
-      for(int col=-10;col<=10;++col) {
+      for(int col=-24;col<=24;++col) {
         int color=MmxCosmicShotPixel(s->weapon,s->age,s->facing?col:-col,row);
         int dx=cx+col+view.extra;
         if(color>=0 && dx>=0 && dx<view.width) {objects[dx]=0xe681;object_colors[dx]=color;}
@@ -1432,6 +1454,20 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
             frame.lines[0].palette + 128 + ((s->attr >> 9) & 7) * 16)))) piece_assets[i] = a;
   }
   int16_t crystal_ripple[224];MmxWeaponsTimeRipple(&frame_weapon_combat,crystal_ripple);
+  CosmicLight lights[18];unsigned light_count=0,scene_shade=0;
+  if(stage && !swapping && !palette_fade && frame.ram[0xd3]==4 &&
+      !frame.ram[0x1f0c] && !frame.ram[0x1f23] && MmxZeroEnabled()) {
+    light_count=cosmic_lights(lights,0,frame.ram,&frame_zero,&frame_weapon_combat,view);
+    if(frame_coop.initialized && !frame_coop.scene_owner &&
+        frame_coop.players[frame_coop.current^1].status==MMX_COOP_ALIVE) {
+      const MmxCoopPlayer *partner=&frame_coop.players[frame_coop.current^1];
+      light_count=cosmic_lights(lights,light_count,partner_ram,&partner->zero,&partner->combat,view);
+    }
+    for(unsigned i=0;i<light_count;++i) {
+      unsigned shade=lights[i].power>=6?3:lights[i].power/2;
+      if(shade>scene_shade) scene_shade=shade;
+    }
+  }
   if (frame_coop.initialized && MmxWeaponsTimePhase(&frame_coop.players[frame_coop.current^1].combat)==1 &&
       MmxWeaponsTimePhase(&frame_weapon_combat)!=1)
     MmxWeaponsTimeRipple(&frame_coop.players[frame_coop.current^1].combat,crystal_ripple);
@@ -1702,6 +1738,20 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
         int activity=MmxCityActivityPixel(x+view_camera(frame.ram,0x1e4d)/8,y,
             frame_weapon_combat.tick,base);
         if(activity>=0) bg_colors[1]=activity;
+      }
+      if(light_count) {
+        unsigned earth=0,storm=0;
+        for(unsigned i=0;i<light_count;++i) {
+          unsigned strength=MmxCosmicLightStrength(x-lights[i].x,y-lights[i].y,lights[i].power);
+          unsigned *amount=lights[i].kind==MMX_EARTH_WAVE?&earth:&storm;
+          if(strength>*amount) *amount=strength;
+        }
+        /* Light the scenery before native fades, windows and color math.
+         * Text/HUD and actor palette silhouettes stay crisp over the light. */
+        for(unsigned layer=0;layer<2;++layer) if(bg[layer]) {
+          uint16_t base=bg_colors[layer]>=0?(uint16_t)bg_colors[layer]:r->palette[bg[layer]&255];
+          bg_colors[layer]=MmxCosmicLitColor(base,earth,storm,scene_shade);
+        }
       }
       if (palette_fade) {
         for (int layer = 0; layer < 3; ++layer) if (bg_colors[layer] >= 0)

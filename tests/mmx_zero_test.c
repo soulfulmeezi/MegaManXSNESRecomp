@@ -105,6 +105,9 @@ static void storm_combo_checks(void) {
       assert(s.slash==1 && s.combo==swing && MmxZeroStormSlash(&s));
       while(MmxZeroGetState().slash<7) tick(0,0);
       s=MmxZeroGetState();
+      const unsigned body_pose[3]={119,122,120},blade_pose[3]={138,144,138};
+      assert((MmxZeroPose(ram,&s)-MmxZeroMenuPose())/16384==body_pose[swing]);
+      assert((MmxZeroBlade(&s)-MmxZeroMenuPose())/16384==blade_pose[swing]);
       assert(MmxZeroDamage(ram,0xe68,s.projectile,128)==128);
       assert(MmxZeroDamage(ram,0xe68,s.projectile,3)==(swing==2?6:swing==1?4:3));
       assert(MmxZeroDamage(ram,0xe68,s.projectile,3)==0);

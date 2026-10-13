@@ -18,12 +18,24 @@ static inline uint16_t MmxCosmicRgb(unsigned r,unsigned g,unsigned b) {
 /* Authored, opaque SNES pixels. -1 leaves the scene transparent. */
 static inline int MmxCosmicShotPixel(unsigned kind,unsigned age,int x,int y) {
   if(kind==MMX_EARTH_WAVE) {
-    if(x < -10 || x > 10 || y < -10 || y > 8) return -1;
-    int ax=x<0?-x:x;
-    int crest=-(9-ax/2)+(int)((age/3+(unsigned)(x+10)/4)&1);
-    if(y==crest || y==crest+1) return MmxCosmicRgb(27,31,30);
-    if(y>crest+1 && y<crest+5) return MmxCosmicRgb(5,22,18);
-    if(y>=4 && y<=7 && ((x+(int)age/2)&7)<3) return MmxCosmicRgb(19,17,9);
+    if(x < -24 || x > 12 || y < -28 || y > 9) return -1;
+    /* A breaking ridge of stone, a blue-white rim and a trailing dust wake.
+     * x points forward; the renderer mirrors the entire effect with travel. */
+    if(x>=-10 && x<=10) {
+      static const int8_t ridge[21]={-1,-4,-3,-7,-10,-9,-15,-14,-20,-26,-25,-20,-18,-21,-16,-11,-9,-8,-4,-5,-1};
+      int crest=ridge[x+10]+(int)((age/4)&1);
+      if(y>=crest && y<=crest+2) return MmxCosmicRgb(28,31,31);
+      if(y>crest+2 && y<crest+6) return MmxCosmicRgb(4,23,25);
+      if(y>=crest+6 && y<=7) {
+        if(((x+32)/4+(y+32)/5)%3==0) return MmxCosmicRgb(5,12,15);
+        return y<0?MmxCosmicRgb(14,20,15):MmxCosmicRgb(21,19,12);
+      }
+    }
+    if(x<-8) {
+      int rise=(int)((age+(unsigned)(-x)*3)%16),dust=-x-8;
+      if(y==5-rise && dust%5<3) return MmxCosmicRgb(25,26,20);
+      if(y>=6 && y<=8 && ((x+(int)age)&7)<5) return MmxCosmicRgb(9,18,19);
+    }
   } else if(kind==MMX_JUPITER_STORM) {
     if(x < -9 || x > 9 || y < -16 || y > 16) return -1;
     int ay=y<0?-y:y;
@@ -35,12 +47,53 @@ static inline int MmxCosmicShotPixel(unsigned kind,unsigned age,int x,int y) {
   }
   return -1;
 }
+/* Quantized SNES lighting, with no timer independent of saved combat state. */
+static inline unsigned MmxCosmicLightStrength(int dx,int dy,unsigned power) {
+  unsigned ax=(unsigned)(dx<0?-dx:dx),ay=(unsigned)(dy<0?-dy:dy);
+  unsigned distance=ax>ay?ax+ay/2:ay+ax/2;
+  unsigned falloff=distance/8;
+  return power>falloff?power-falloff:0;
+}
+static inline uint16_t MmxCosmicLitColor(uint16_t base,unsigned earth,unsigned storm,unsigned shade) {
+  unsigned values[3];
+  if(earth>10) earth=10;if(storm>10) storm=10;if(shade>4) shade=4;
+  for(unsigned i=0;i<3;++i) {
+    unsigned c=(base>>(i*5))&31;
+    c=c*(16-shade)/16 + earth*(i==0?1:2) + storm*(i==2?1:2);
+    values[i]=c>31?31:c;
+  }
+  return MmxCosmicRgb(values[0],values[1],values[2]);
+}
 /* Distant Highway ambience. The caller applies this only to the original
  * BG2 layer, behind terrain, actors and HUD, before native fades/windows. */
 static inline int MmxCityActivityPixel(int x,int y,unsigned tick,uint16_t base) {
   unsigned r=base&31,g=(base>>5)&31,b=(base>>10)&31;
   int u=(x+(int)(tick/8))&255;
   int sky=r>=8 && r<=14 && g>=5 && g<=10 && b>=7 && b<=14 && r>g;
+  if(y>=164 && y<224) {
+    /* Distant lower streets: emergency traffic, localized blasts, smoke and
+     * falling sparks. These pixels belong to BG2, behind highway pillars. */
+    unsigned cell=(unsigned)x>>7,phase=(tick+cell*83)%240;
+    int local=x&127,dx=local-58,dy=y-192;
+    int ax=dx<0?-dx:dx,ay=dy<0?-dy:dy;
+    if(phase<96) {
+      int radius=phase<24?2+(int)phase/2:14-(int)(phase-24)/6;
+      if(ax+ay<radius) return ax+ay<radius/2?MmxCosmicRgb(31,29,18):MmxCosmicRgb(28,12,4);
+      if(phase>12 && dy<0 && dy>-(int)(phase/2) && ax<3+(192-y)/6 &&
+          ((x+y+(int)phase/6)&3)!=0) return MmxCosmicRgb(8,8,10);
+    }
+    if(phase>=24 && phase<112 && local>=45 && local<=71) {
+      int fall=164+(int)((phase+local*7)%52);
+      if(y==fall && (local%7)==0) return MmxCosmicRgb(30,18,5);
+    }
+    if(y>=188 && y<=191) {
+      int car=(x+(int)(tick/2))&127;
+      if(car>=12 && car<=23) {
+        if(y==188) return (tick/10)&1?MmxCosmicRgb(27,5,4):MmxCosmicRgb(7,17,31);
+        return y==191?MmxCosmicRgb(8,10,14):MmxCosmicRgb(20,21,20);
+      }
+    }
+  }
   if(sky && y>=16 && y<100) {
     int band=(y-16)/28, row=(y-16)%28;
     int drift=(u+band*83)&127;

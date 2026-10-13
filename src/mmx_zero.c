@@ -385,9 +385,16 @@ static unsigned slash_pose(const MmxZeroState *s) {
   /* Vanilla X3 group $4B actions $00/$0E: duration, frame. */
   static const uint8_t duration[] = {3,3,1,2,3,3,6,16,3,3,3};
   static const uint8_t pose[] = {0,1,2,2,3,4,5,6,4,1,0};
+  /* Three choreographies assembled from the original grounded/air poses:
+   * forward cut, low-to-high backswing, and a held overhead heavy cut. */
+  static const uint8_t storm_pose[3][11] = {
+    {0,1,2,2,3,4,5,6,4,1,0},
+    {6,6,5,5,4,3,2,1,1,0,0},
+    {0,2,3,3,4,5,6,6,4,1,0}
+  };
   unsigned age = s->slash;
   for (unsigned i = 0; i < sizeof(duration); ++i) {
-    if (age < duration[i]) return pose[i] + (s->air ? 7 : 0);
+    if (age < duration[i]) return (MmxZeroStormSlash(s)?storm_pose[s->combo%3][i]:pose[i]) + (s->air ? 7 : 0);
     age -= duration[i];
   }
   return 0;
@@ -434,6 +441,10 @@ const uint8_t *MmxZeroBlade(const MmxZeroState *s) {
   static const uint8_t duration[] = {3,3,3,3,7,3,3};
   unsigned age = s->slash - 7, pose = 0;
   while (pose < 6 && age >= duration[pose]) age -= duration[pose++];
+  if(MmxZeroStormSlash(s)) {
+    static const uint8_t arc[3][7]={{0,1,2,3,4,5,6},{6,5,4,3,2,1,0},{0,2,2,3,3,4,6}};
+    pose=arc[s->combo%3][pose];
+  }
   return poses + (size_t)(138 + pose + (s->air ? 7 : 0)) * MMX_ZERO_WIDTH * MMX_ZERO_HEIGHT;
 }
 void MmxZeroSetCollisionRom(uint8_t *rom, size_t size) {
