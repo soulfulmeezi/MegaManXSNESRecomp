@@ -2,6 +2,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include "mmx_future_zero_color.h"
+#include "mmx_zero_jupiter_stripes.h"
 #include "mmx_cpu_safe_follow.h"
 static uint16_t rgb(unsigned r,unsigned g,unsigned b) {
   return (uint16_t)(r|(g<<5)|(b<<10));
@@ -23,6 +24,26 @@ static void jupiter_palette_is_selective(void) {
   assert(MmxFutureZeroJupiter(rgb(3,3,3))==rgb(3,3,3)); /* outline */
   assert(MmxFutureZeroJupiter(rgb(3,4,24))==rgb(3,4,24)); /* charge blue */
   assert(MmxFutureZeroJupiter(rgb(10,0,0))==rgb(10,0,0)); /* too dark */
+}
+static void jupiter_cloud_belts_are_pose_local(void) {
+  uint16_t red=rgb(31,5,3), base=MmxFutureZeroJupiter(red);
+  /* Stripe coloring really changes individual sprite pixels: neighboring
+   * horizontal bands get different cloud-belt colors from the same index. */
+  uint16_t cream=MmxZeroJupiterStripePixel(red,base,0,30,30);
+  uint16_t rust=MmxZeroJupiterStripePixel(red,base,0,38,30);
+  assert(cream!=rust);
+  assert(cream!=base);
+  assert(rust!=base);
+  /* The pattern is anchored to each pose's armor-top instead of screen Y. */
+  assert(cream!=MmxZeroJupiterStripePixel(red,base,0,30,27));
+  /* Only actual red armor is eligible, independent of pose and body shape. */
+  assert(MmxZeroJupiterStripePixel(rgb(31,26,4),base,0,38,30)==base);
+  assert(MmxZeroJupiterStripePixel(rgb(31,18,13),base,0,38,30)==base);
+  assert(MmxZeroJupiterStripePixel(rgb(2,21,5),base,0,38,30)==base);
+  assert(MmxZeroJupiterStripePixel(rgb(13,1,2),base,0,38,30)==base);
+  assert(MmxZeroJupiterStripePixel(red,base,0,29,30)==base);
+  assert(MmxZeroJupiterStripePixel(red,base,128,38,30)==base);
+  assert(MmxZeroJupiterStripePixel(red,base,0,128,30)==base);
 }
 static void no_rush_and_camera_are_continuous(void) {
   assert(MmxCpuSafeFollowLimit(false)==224);
@@ -54,8 +75,9 @@ static void vertical_jump_has_no_horizontal_input(void) {
 }
 int main(void) {
   jupiter_palette_is_selective();
+  jupiter_cloud_belts_are_pose_local();
   no_rush_and_camera_are_continuous();
   vertical_jump_has_no_horizontal_input();
-  puts("Jupiter Zero palette & safe-follow: 3 test groups passed");
+  puts("Jupiter Zero stripes & safe-follow: 4 test groups passed");
   return 0;
 }
