@@ -103,7 +103,9 @@ static void storm_combo_checks(void) {
     for(unsigned swing=0;swing<3;++swing) {
       MmxZeroState s=MmxZeroGetState();
       assert(s.slash==1 && s.combo==swing && MmxZeroStormSlash(&s));
-      while(MmxZeroGetState().slash<7) tick(0,0);
+      unsigned startup=0;
+      while(MmxZeroGetState().slash<7) {tick(0,0);++startup;}
+      assert(startup==3);
       s=MmxZeroGetState();
       const unsigned body_pose[3]={119,122,120},blade_pose[3]={138,144,138};
       assert((MmxZeroPose(ram,&s)-MmxZeroMenuPose())/16384==body_pose[swing]);
@@ -118,7 +120,7 @@ static void storm_combo_checks(void) {
       assert(storm_count==(swing==2));
       if(swing<2) {
         tick(64,64);
-        unsigned timeout=60;
+        unsigned timeout=15;
         while(MmxZeroGetState().combo==swing && --timeout) tick(0,0);
         assert(timeout);
       }

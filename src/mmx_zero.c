@@ -818,14 +818,15 @@ void MmxZeroPlayerTick(uint8_t r[0x20000]) {
       r[0xbdf]&=(uint8_t)~64;r[0xbe3]&=(uint8_t)~64;
       return;
     }
-    /* Direct saber uses the same ground/air art and collision arc. Retain
-     * every pose, shortening only the long follow-through hold. */
+    /* Advance the authored timeline twice per simulation tick for a snappy
+     * combo; keep native hit phases, save layout and damage unchanged. */
     state.charge = state.charge_phase = 0;
     state.burst = state.burst_end = 0;
-    if (state.slash && pressed && state.slash >= 7 && state.combo<2)
+    if (state.slash && pressed && state.slash >= 3 && state.combo<2)
       state.modern.slash_buffer = 1;
     if (state.slash) {
-      if (++state.slash == 23) state.slash = 26;
+      state.slash+=2;
+      if (state.slash == 23 || state.slash == 24) state.slash = 26;
       else if (state.slash == 32) state.slash = 37;
       bool queued=state.modern.slash_buffer && state.combo<2;
       if (state.slash > 44 || (queued && state.slash>=32)) {

@@ -974,6 +974,34 @@ static void moved_enemy_row(const MmxWeaponShot *s,const Ppu *p,const Raster *r,
   }
 }
 typedef struct CosmicLight { int x,y; unsigned power,kind; } CosmicLight;
+typedef struct LowerCar { int x,y; unsigned depth,reverse,variant,layer; } LowerCar;
+static unsigned lower_traffic(LowerCar cars[32],MmxRenderView view,unsigned tick) {
+  unsigned count=0;
+  /* Sample the actual road spans at each car's depth: this follows the
+   * diagonal perspective in the screenshot instead of a screen-wide lane. */
+  for(unsigned stream=0;stream<4;++stream) {
+    unsigned travel=(tick/2+stream*17)%52;
+    unsigned depth=(stream&1)?51-travel:travel;
+    int y=166+(int)depth;
+    const Raster *r=frame.lines+y;Ppu p;memcpy(&p,r->registers,PPU_SAVESTATE_REGS_SIZE);
+    for(unsigned layer=0;layer<2;++layer) {
+      if(!((p.screenEnabled[0]|p.screenEnabled[1])&(1<<layer))) continue;
+      int start=-view.extra;
+      for(int x=-view.extra;x<=view.width-view.extra;++x) {
+        int color=-1;unsigned tile=x<view.width-view.extra?background(&p,r,layer,x,y+1,true,&color):0;
+        bool road=tile && MmxLowerRoadColor(color>=0?(uint16_t)color:r->palette[tile&255]);
+        if(road) continue;
+        int width=x-start;
+        if(width>=14 && count<32) {
+          int center=start+(width>=26?width*((stream&1)?2:1)/3:width/2);
+          cars[count++]=(LowerCar){center,y,depth,stream&1,stream+(unsigned)(center+view.extra)/32,layer};
+        }
+        start=x+1;
+      }
+    }
+  }
+  return count;
+}
 static unsigned cosmic_lights(CosmicLight *lights,unsigned count,const uint8_t *ram,
     const MmxZeroState *zero,const MmxWeaponCombatState *combat,MmxRenderView view) {
   for(unsigned i=0;i<9 && count<18;++i) {
@@ -1455,6 +1483,9 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
   }
   int16_t crystal_ripple[224];MmxWeaponsTimeRipple(&frame_weapon_combat,crystal_ripple);
   CosmicLight lights[18];unsigned light_count=0,scene_shade=0;
+  LowerCar cars[32];unsigned car_count=stage && MmxZeroEnabled() &&
+      frame.ram[0x1f7a]==0 && frame.ram[0xd3]==4?
+      lower_traffic(cars,view,frame_weapon_combat.tick):0;
   if(stage && !swapping && !palette_fade && frame.ram[0xd3]==4 &&
       !frame.ram[0x1f0c] && !frame.ram[0x1f23] && MmxZeroEnabled()) {
     light_count=cosmic_lights(lights,0,frame.ram,&frame_zero,&frame_weapon_combat,view);
@@ -1738,6 +1769,15 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
         int activity=MmxCityActivityPixel(x+view_camera(frame.ram,0x1e4d)/8,y,
             frame_weapon_combat.tick,base);
         if(activity>=0) bg_colors[1]=activity;
+      }
+      for(unsigned i=0;i<car_count;++i) {
+        const LowerCar *car=cars+i;unsigned layer=car->layer;
+        int pixel=MmxLowerCarPixel(x-car->x,y-car->y,car->depth,car->reverse,car->variant);
+        if(pixel<0 || !bg[layer]) continue;
+        /* Use the untouched road pixel for occlusion, not a fire/light color. */
+        int native_color=-1;unsigned tile=background(&p,r,layer,x,y+1,true,&native_color);
+        uint16_t base=native_color>=0?(uint16_t)native_color:r->palette[tile&255];
+        if(tile && MmxLowerRoadColor(base)) bg_colors[layer]=pixel;
       }
       if(light_count) {
         unsigned earth=0,storm=0;

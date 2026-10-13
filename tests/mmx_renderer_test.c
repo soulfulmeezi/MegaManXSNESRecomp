@@ -1257,6 +1257,13 @@ static void cosmic_combat(void) {
   assert(MmxCityActivityPixel(58,224,0,0)<0);
   assert(MmxCosmicShotPixel(MMX_EARTH_WAVE,1,0,-24)>=0);
   assert(MmxCosmicLightStrength(0,0,9)==9);
+  assert(MmxLowerRoadColor(MmxCosmicRgb(5,9,7)));
+  assert(!MmxLowerRoadColor(MmxCosmicRgb(15,24,13))); /* Pillar. */
+  assert(!MmxLowerRoadColor(MmxCosmicRgb(10,7,10))); /* Sky. */
+  assert(MmxLowerCarPixel(0,3,30,0,0)>=0);
+  assert(MmxLowerCarPixel(10,3,30,0,0)<0);
+  for(int y=0;y<10;++y) for(int x=-4;x<=4;++x)
+    assert(MmxLowerCarPixel(x,y,30,0,1)==MmxLowerCarPixel(x,9-y,30,1,1));
   assert(MmxCosmicLightStrength(-8,8,9)==8);
   assert(MmxCosmicLightStrength(90,90,9)==0);
   for(unsigned c=0;c<32768;++c) {

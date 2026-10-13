@@ -113,3 +113,22 @@ static inline int MmxCityActivityPixel(int x,int y,unsigned tick,uint16_t base) 
     return MmxCosmicRgb(16,19,14);
   return -1;
 }
+/* The lower expressways use dark green asphalt. Bright support pillars and
+ * lane paint must occlude traffic instead of receiving painted-on cars. */
+static inline int MmxLowerRoadColor(uint16_t c) {
+  unsigned r=c&31,g=(c>>5)&31,b=(c>>10)&31;
+  return r>=3 && r<=10 && g>=6 && g<=14 && b>=3 && b<=10 && g>=r+2 && g>b;
+}
+static inline int MmxLowerCarPixel(int x,int y,unsigned depth,unsigned reverse,unsigned variant) {
+  int half=2+(int)depth/20,height=7+(int)depth/10;
+  if(x < -half || x>half || y<0 || y>=height) return -1;
+  if(reverse) y=height-1-y;
+  int ax=x<0?-x:x;
+  if((y==0 || y==height-1) && ax==half) return -1;
+  if(ax==half || y==0 || y==height-1) return MmxCosmicRgb(2,4,5);
+  if(y==height-2 && ax==half-1) return MmxCosmicRgb(30,30,22);
+  if(y==1 && ax==half-1) return MmxCosmicRgb(27,4,3);
+  if(y==height-4 || y==height-3) return MmxCosmicRgb(15,24,26);
+  static const uint16_t bodies[]={9|(14<<5)|(23<<10),23|(13<<5)|(6<<10),20|(22<<5)|(20<<10)};
+  return bodies[variant%3];
+}
