@@ -81,6 +81,7 @@ static void jupiter_planet_masks_replace_sprite_panels(void) {
   palette[21]=rgb(24,24,24); /* secondary metallic panel */
   palette[22]=rgb(3,4,24);   /* blue visor / eye */
   palette[23]=rgb(12,12,12); /* interior metallic seam */
+  palette[24]=rgb(12,4,0);  /* darkest original red armor shade */
   /* A tiny fictional Zero pose: separate helmet, chest, shoulder, forearm,
    * thigh and boot plates, all in the original indexed 16-bit style. */
   for(unsigned y=20;y<=23;++y) for(unsigned x=58;x<=67;++x)
@@ -96,6 +97,7 @@ static void jupiter_planet_masks_replace_sprite_panels(void) {
     sprite[y*128+x]=21; /* right shoulder */
   for(unsigned y=38;y<=69;++y) for(unsigned x=53;x<=74;++x)
     sprite[y*128+x]=x<62?16:21;
+  sprite[45*128+57]=24; /* dark armor still receives the plate texture */
   for(unsigned y=38;y<=69;++y) sprite[y*128+63]=23;
   for(unsigned y=38;y<=69;++y) sprite[y*128+80]=19;
   sprite[44*128+55]=20;
@@ -123,6 +125,7 @@ static void jupiter_planet_masks_replace_sprite_panels(void) {
   unsigned boot=mask[91*128+55];
   assert(chest && helmet && shoulder && forearm && thigh && boot);
   assert(mask[45*128+53]==chest && mask[45*128+70]==chest);
+  assert(mask[45*128+57]==chest); /* dark red shade has no charcoal hole */
   assert(mask[45*128+63]==chest); /* enclosed seam joins its plate */
   assert(mask[41*128+80]!=chest && mask[58*128+86]!=chest &&
          mask[77*128+70]!=chest && boot!=chest);
@@ -143,9 +146,9 @@ static void jupiter_planet_masks_replace_sprite_panels(void) {
   assert(MmxJupiterPlanetColor(0,chest,60,45,sections)!=
          MmxJupiterPlanetColor(0,chest,60,53,sections)); /* local belts */
   assert(MmxJupiterPlanetColor(0,chest,64,53,sections)==
-         MmxFutureZeroBgr555(28,10,4)); /* red-orange Great Red Spot */
+         MmxFutureZeroBgr555(30,9,3)); /* red-orange Great Red Spot */
   assert(MmxJupiterPlanetColor(0,chest,65,53,sections)==
-         MmxFutureZeroBgr555(30,22,14)); /* lighter spot swirl */
+         MmxFutureZeroBgr555(30,24,18)); /* lighter spot swirl */
   assert(sections[shoulder-1].flags&MMX_JUPITER_SECTION_SWIRL);
   assert(MmxJupiterPlanetColor(0,shoulder,sections[shoulder-1].center_x,
       sections[shoulder-1].center_y-2,sections)==
@@ -180,6 +183,8 @@ static void jupiter_planet_masks_replace_sprite_panels(void) {
       }
     assert(has_cream && has_tan && has_rust && has_brown);
   }
+  assert(MmxJupiterPlanetPaintable(24,palette));
+  assert(!MmxJupiterPlanetBrightArmor(palette[19])); /* black undersuit */
 }
 static void no_rush_and_camera_are_continuous(void) {
   assert(MmxCpuSafeFollowLimit(false)==224);

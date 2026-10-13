@@ -29,8 +29,11 @@ static inline bool MmxJupiterPlanetBlueFace(uint16_t c) {
 static inline bool MmxJupiterPlanetBrightArmor(uint16_t c) {
   unsigned r=c&31,g=(c>>5)&31,b=(c>>10)&31;
   unsigned hi=MmxJovianMax3(r,g,b);
-  return hi>=14 && !MmxJovianFaceSkin(c) &&
-      !MmxJupiterPlanetBlueFace(c);
+  /* All seven original red armor shades belong to the plates. The darkest
+   * two are intentionally below the metal brightness cutoff; leaving them
+   * out made the cloud belts collapse into charcoal gaps at runtime. */
+  return !MmxJovianFaceSkin(c) && !MmxJupiterPlanetBlueFace(c) &&
+      (MmxFutureZeroIsRedArmor(c) || hi>=14);
 }
 static inline bool MmxJupiterPlanetPaintable(unsigned pixel,
     const uint16_t palette[128]) {
@@ -229,41 +232,62 @@ static inline uint16_t MmxJupiterPlanetColor(
   static const int8_t curve[16]={0,0,1,1,2,1,0,0,-1,-1,-2,-1,0,1,1,0};
   unsigned local_x=x-s->left,local_y=y-s->top;
   unsigned height=s->bottom-s->top+1;
-  unsigned period=height<14?height:14;
   unsigned wave=(local_x+s->pattern_seed)%16u;
-  int phase=(int)local_y+curve[wave]+(int)(s->pattern_seed%7u);
-  phase%=(int)period;
-  if(phase<0)phase+=(int)period;
-  unsigned band=(unsigned)phase*14u/period;
+  int warped=(int)local_y+curve[wave];
   bool boot=(s->flags&MMX_JUPITER_SECTION_BOOT)!=0;
   uint16_t cloud;
-  if(boot) {
+  if(height<14) {
+    /* Short plates still need all four recognizable Jupiter hues. Compress
+     * the pattern into four broad lanes and clamp the wave at plate edges;
+     * modulo wrapping used to skip the brown lane on helmets and forearms. */
+    if(warped<0)warped=0;
+    if(warped>=(int)height)warped=(int)height-1;
+    unsigned lane=(unsigned)warped*4u/height;
+    if(boot) {
+      cloud=lane==0?MmxFutureZeroBgr555(27,26,24):
+          lane==1?MmxFutureZeroBgr555(24,20,15):
+          lane==2?MmxFutureZeroBgr555(22,13,7):
+                  MmxFutureZeroBgr555(11,6,4);
+    } else {
+      cloud=lane==0?MmxFutureZeroBgr555(29,28,26):
+          lane==1?MmxFutureZeroBgr555(26,22,17):
+          lane==2?MmxFutureZeroBgr555(24,16,10):
+                  MmxFutureZeroBgr555(15,9,5);
+    }
+  } else {
+    int phase=warped+(int)(s->pattern_seed%7u);
+    phase%=14;
+    if(phase<0)phase+=14;
+    unsigned band=phase;
+    if(boot) {
     cloud=band<1?MmxFutureZeroBgr555(27,26,24):
         band<3?MmxFutureZeroBgr555(24,20,15):
         band<6?MmxFutureZeroBgr555(22,13,7):
         band<9?MmxFutureZeroBgr555(18,10,6):
                MmxFutureZeroBgr555(11,6,4);
-  } else {
-    cloud=band<2?MmxFutureZeroBgr555(29,28,26):
-        band<5?MmxFutureZeroBgr555(26,22,17):
-        band<8?MmxFutureZeroBgr555(24,16,10):
-        band<10?MmxFutureZeroBgr555(20,12,7):
-        band<12?MmxFutureZeroBgr555(15,9,5):
-                MmxFutureZeroBgr555(26,22,17);
+    } else {
+      /* Broad cream/tan cloud lanes with narrower rust and brown storms. */
+      cloud=band<3?MmxFutureZeroBgr555(29,28,26):
+          band<7?MmxFutureZeroBgr555(26,22,17):
+          band<9?MmxFutureZeroBgr555(24,16,10):
+          band<10?MmxFutureZeroBgr555(15,9,5):
+          band<12?MmxFutureZeroBgr555(20,12,7):
+                  MmxFutureZeroBgr555(26,22,17);
+    }
   }
 
   if(s->flags&MMX_JUPITER_SECTION_CHEST) {
     unsigned width=s->right-s->left+1;
-    int rx=width>=17?4:width>=11?3:2;
-    int ry=height>=12?2:1;
+    int rx=width>=17?5:width>=11?4:3;
+    int ry=height>=12?3:2;
     int sx=(int)s->center_x+(width>=13?1:0),sy=s->center_y;
     int dx=(int)x-sx,dy=(int)y-sy;
     int ellipse=dx*dx*ry*ry+dy*dy*rx*rx;
     int limit=rx*rx*ry*ry;
     if(ellipse<=limit) {
       if(MmxJupiterPlanetSwirlPixel(dx,dy))
-        return MmxFutureZeroBgr555(30,22,14); /* pale storm swirl */
-      return MmxFutureZeroBgr555(28,10,4); /* Great Red Spot */
+        return MmxFutureZeroBgr555(30,24,18); /* pale storm swirl */
+      return MmxFutureZeroBgr555(30,9,3); /* Great Red Spot */
     }
     if(ellipse<=limit+rx*ry*2)
       cloud=MmxFutureZeroBgr555(25,16,10); /* storm's rust edge */

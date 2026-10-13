@@ -249,7 +249,10 @@ static void activate_coop(void) {
   }
   snes_mod_runtime_feature_option_value_c("megaman-x.coop","coop","companion",companion,sizeof(companion));
   MmxCoopSetCpuCompanion(!strcmp(companion,"cpu"));
-  fprintf(stderr,"[mmx-coop] Co-op enabled; P1 is %s\n",p1==MMX_COOP_X?"X":"Zero");
+  fprintf(stderr,"[mmx-coop] Co-op enabled; P1 is %s; P2 control is %s%s\n",
+      p1==MMX_COOP_X?"X":"Zero",
+      !strcmp(companion,"cpu")?"CPU companion":"human controller",
+      !strcmp(companion,"cpu")?" (hold L2 on P1 to switch characters)":" (CPU follow and L2 switching are off)");
 }
 static void activate_weapons(unsigned game) {
   char path[4096];
