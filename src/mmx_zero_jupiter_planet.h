@@ -41,12 +41,11 @@ static inline void MmxJupiterPlanetMask(
     unsigned *anchor_top, unsigned *storm_x,unsigned *storm_y) {
   uint8_t protected_hair[MMX_JUPITER_POSE_PIXELS]={0};
   uint16_t queue[MMX_JUPITER_POSE_PIXELS];
-  unsigned top=128,bottom=0,face_x=0,face_y=0,faces=0;
+  unsigned top=128,face_x=0,face_y=0,faces=0;
   for(unsigned y=0;y<128;++y) for(unsigned x=0;x<128;++x) {
     unsigned pixel=source[y*128+x];
     if(pixel>=16 && pixel<32) {
       if(y<top) top=y;
-      if(y>bottom) bottom=y;
     }
   }
   if(top==128) { /* No body in an empty animation pose. */
@@ -68,8 +67,8 @@ static inline void MmxJupiterPlanetMask(
     unsigned p=y*128+x,pixel=source[p];
     if(protected_hair[p] || pixel<16 || pixel>=32 ||
         !MmxJovianGoldenHair(palette[pixel]) ||
-        (int)x<(int)face_x-31 || x>face_x+31 ||
-        y>face_y+19) continue;
+        (int)x<(int)face_x-24 || x>face_x+24 ||
+        y>face_y+2) continue;
     unsigned head=0,tail=0;queue[tail++]=(uint16_t)p;
     protected_hair[p]=1;
     while(head<tail) {
