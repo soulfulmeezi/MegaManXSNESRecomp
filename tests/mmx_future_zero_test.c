@@ -199,19 +199,57 @@ static void x_earth_armor_is_section_local(void) {
   assert(!MmxEarthXFaceDetail(0xba8,MMX_EARTH_HELMET,2,-18));
   assert(!MmxEarthXFaceDetail(0xc38,MMX_EARTH_HELMET,7,-18));
 
-  bool distinct_sections=false, has_ocean=false, has_land=false, has_cloud=false, has_storm=false;
-  for(int y=-36;y<=36;++y) for(int x=-28;x<=28;++x) {
-    uint16_t helmet=MmxEarthXArmorPixel(blue,MMX_EARTH_HELMET,x,y);
-    uint16_t chest=MmxEarthXArmorPixel(blue,MMX_EARTH_CHEST,x,y);
-    if(helmet!=chest) distinct_sections=true;
-    if(helmet==MmxEarthRgb(2,8,19) || helmet==MmxEarthRgb(3,13,25) || helmet==MmxEarthRgb(6,18,30)) has_ocean=true;
-    unsigned r=helmet&31,g=(helmet>>5)&31,b=(helmet>>10)&31;
-    if(g>b && g>=15) has_land=true;
-    if(r>=17 && g>=25 && b>=29) has_cloud=true;
-    if(r==29 && g==30 && b==31) has_storm=true;
-    assert(MmxEarthXArmorPixel(blue,MMX_EARTH_HELMET,x,y)==helmet); /* pose-stable */
+  /* Every native-size plate has one connected continent, an ocean majority,
+   * a small tan interior and at most 5% clouds. Large maps used to pass broad
+   * area scans while leaving actual plates blue or almost entirely white. */
+  for(unsigned section=0;section<MMX_EARTH_SECTION_COUNT;++section) {
+    unsigned land=0,cloud=0,dry=0,head=0,tail=0;
+    bool seen[144]={false}; int queue[144];
+    for(int y=0;y<12;++y) for(int x=0;x<12;++x) {
+      char m=MmxEarthXMaterial(section,x,y);
+      if(m=='G' || m=='T') {
+        ++land;
+        if(!tail) { queue[tail++]=y*12+x; seen[y*12+x]=true; }
+      }
+      dry+=m=='T'; cloud+=m=='C';
+      assert(m=='.' || m=='G' || m=='T' || m=='C');
+      assert(!(m=='C' && MmxEarthXMaterial(section,x+1,y)=='C' &&
+          MmxEarthXMaterial(section,x,y+1)=='C' && MmxEarthXMaterial(section,x+1,y+1)=='C'));
+      /* Material placement stays identical across the native lighting ramp. */
+      const uint16_t shades[]={rgb(0,4,20),rgb(4,10,27),rgb(12,23,31)};
+      unsigned previous=0;
+      for(unsigned s=0;s<3;++s) {
+        uint16_t c=MmxEarthXArmorPixel(shades[s],section,x,y);
+        unsigned r=c&31,g=(c>>5)&31,b=(c>>10)&31;
+        assert((m=='.' && b>g && g>r) || (m=='G' && g>r && g>b) ||
+            (m=='T' && r>g && g>b) || (m=='C' && r>=17 && g>=23 && b>=25));
+        assert(r+g+b>previous); previous=r+g+b;
+      }
+    }
+    assert(land>=36 && land<=70 && dry>=2 && dry<=8 && cloud>=3 && cloud<=7);
+    /* Flood-fill the periodic chart so an origin offset does not split a
+     * connected coastline at the sample window boundary. */
+    while(head<tail) {
+      int cell=queue[head++],x=cell%12,y=cell/12;
+      const int neighbors[]={y*12+(x+1)%12,y*12+(x+11)%12,
+          ((y+1)%12)*12+x,((y+11)%12)*12+x};
+      for(unsigned n=0;n<4;++n) {
+        int next=neighbors[n]; char m=MmxEarthXMaterial(section,next%12,next/12);
+        if(!seen[next] && (m=='G' || m=='T')) { seen[next]=true;queue[tail++]=next; }
+      }
+    }
+    assert(tail==land);
+    for(unsigned other=0;other<section;++other) {
+      unsigned differences=0;
+      for(int y=0;y<12;++y) for(int x=0;x<12;++x)
+        differences+=MmxEarthXMaterial(section,x,y)!=MmxEarthXMaterial(other,x,y);
+      assert(differences>=12);
+    }
   }
-  assert(distinct_sections && has_ocean && has_land && has_cloud && has_storm);
+  /* Protect every non-blue SNES color, not only a few example swatches. */
+  for(unsigned c=0;c<32768;++c) if(!MmxEarthIsBlueArmor((uint16_t)c))
+    for(unsigned s=0;s<MMX_EARTH_SECTION_COUNT;++s)
+      assert(MmxEarthXArmorPixel((uint16_t)c,s,-3,-20)==c);
 }
 static void no_rush_and_camera_are_continuous(void) {
   assert(MmxCpuSafeFollowLimit(false)==224);

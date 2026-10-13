@@ -27,11 +27,6 @@ static inline unsigned MmxEarthMod(int value, unsigned modulus) {
   return (unsigned)(result < 0 ? result + (int)modulus : result);
 }
 
-static inline int MmxEarthFloorDiv(int value, int divisor) {
-  int result = value / divisor;
-  return value < 0 && value % divisor ? result - 1 : result;
-}
-
 static inline uint16_t MmxEarthRgb(unsigned r, unsigned g, unsigned b) {
   return (uint16_t)((r & 31) | ((g & 31) << 5) | ((b & 31) << 10));
 }
@@ -43,57 +38,74 @@ static inline int MmxEarthIsBlueArmor(uint16_t color) {
   return b >= 13 && b >= g + 2 && b >= r + 6;
 }
 
-/* A plate-local, hard-edged Earth surface: blue ocean, blocky green/brown
- * continents, curved pale cloud streaks and a tiny pixel storm curl. Coordinates
- * are anchored to X's body rather than the camera or the OAM tile origin. */
+/* Each chart is twelve native pixels across: a complete coastline fits on a
+ * plate instead of sampling a fragment of a sprite-sized globe. G/T form one
+ * connected continent; T is a small dry interior and C a thin cloud arc.
+ * No noise, interpolated pixels, or randomly alternating terrain shades. */
+static inline char MmxEarthXMaterial(unsigned section, int x, int y) {
+  static const char maps[MMX_EARTH_SECTION_COUNT][12][13] = {
+    { /* Helmet: broad northern land, tapering into a southern peninsula. */
+      "............", "..GGGG......", ".GGTTGG.....", ".GGTTGGG....",
+      "..GGGGGG....", "...GGGG.....", "....GGG.....", ".....GGG....",
+      "......GG....", ".CC...GG....", "...CC.......", "............"
+    },
+    { /* Chest: the largest connected land silhouette is the focal point. */
+      "............", "..GGGG......", ".GGTTGGG....", ".GGTTGGG....",
+      "..GGGGG.....", "...GGG......", "....GGGG....", "....GTTGG...",
+      ".....GGGG...", "......GG....", ".CC....G.CC.", "...C........"
+    },
+    { /* Shoulder: a wide continent wraps over the cap. */
+      "............", "....CC......", "..CC........", "..GGGGGG....",
+      ".GGGTTGGG...", ".GGTTTGGGG..", "..GGGGGGG...", "...GGG.GG...",
+      "....GG......", ".....G......", "............", "............"
+    },
+    { /* Forearm: a single long coast, with a short offshore cloud. */
+      "............", "...GGGG.....", "..GGTGGG....", "..GTTGGG....",
+      "..GGGGGG....", "...GGGG.....", "....GGG.....", "....GGGG....",
+      ".....GG.....", "......G.CC..", ".......C....", "............"
+    },
+    { /* Thigh: a rounded landmass and a narrow southern tip. */
+      "............", "....GGG.....", "...GGTTG....", "..GGTTTGG...",
+      "..GGGGGGG...", "...GGGGGG...", "....GGGG....", ".....GGG....",
+      "......GG....", ".CC....G....", "...CC.......", "............"
+    },
+    { /* Boot: deep ocean around a continuous coast, no white ice blocks. */
+      "............", "..GGG.......", ".GGTTGG.....", ".GGTTGGG....",
+      "..GGGGGG....", "...GGGGG....", "....GGGG....", ".....GGGG...",
+      "......GGG...", ".......GG...", "..CC....G...", "....C......."
+    }
+  };
+  static const int8_t origin_x[] = {-6, -6, 6, 8, 0, 0};
+  static const int8_t origin_y[] = {-28, -16, -23, -10, -6, 5};
+  if (section >= MMX_EARTH_SECTION_COUNT) return '.';
+  /* Paired limbs wrap the same map around their outer surface. Facing is
+   * normalized by the renderer before reaching this body-local chart. */
+  if (section >= MMX_EARTH_SHOULDER && x < 0) x = -x;
+  return maps[section][MmxEarthMod(y - origin_y[section], 12)]
+                      [MmxEarthMod(x - origin_x[section], 12)];
+}
+
+/* Preserve native lighting within each material. The coastline never depends
+ * on palette brightness, tile boundaries, camera position, or animation time. */
 static inline uint16_t MmxEarthXArmorPixel(uint16_t original,
                                           unsigned section,
                                           int x, int y) {
   if (section >= MMX_EARTH_SECTION_COUNT || !MmxEarthIsBlueArmor(original))
     return original;
 
-  static const uint8_t phase[MMX_EARTH_SECTION_COUNT] = {2, 7, 11, 15, 20, 25};
-  unsigned p = phase[section];
   unsigned r = original & 31, g = (original >> 5) & 31, b = (original >> 10) & 31;
   unsigned brightness = (r + g + b) / 3;
-  uint16_t ocean = brightness < 15 ? MmxEarthRgb(2, 8, 19) :
-      brightness < 22 ? MmxEarthRgb(3, 13, 25) : MmxEarthRgb(6, 18, 30);
-
-  /* Continents are laid down in coarse square pixels so the pattern keeps
-   * the native sprite's crisp SNES edges. Each plate has a different map. */
-  int u = (int)MmxEarthMod(MmxEarthFloorDiv(x + (int)p * 3, 4), 16);
-  int v = (int)MmxEarthMod(MmxEarthFloorDiv(y + (int)p * 5, 4), 12);
-  int ax = u - 4, ay = v - 4;
-  int bx = u - 12, by = v - 8;
-  int cx = u - 10, cy = v - 2;
-  int d1 = ax * ax * 2 + ay * ay * 3;
-  int d2 = bx * bx * 2 + by * by * 3;
-  int d3 = cx * cx + cy * cy * 4;
-  int land = (d1 <= 28 || d2 <= 19 || d3 <= 10) &&
-      !((u == 4 || u == 5) && v >= 3 && v <= 5);
-  if (land) {
-    unsigned shade = (unsigned)MmxEarthMod((int)brightness + (int)p + u + v, 3);
-    return shade == 0 ? MmxEarthRgb(5, 15, 8) :
-        shade == 1 ? MmxEarthRgb(8, 22, 10) : MmxEarthRgb(16, 17, 9);
+  unsigned shade = brightness < 11 ? 0 : brightness < 18 ? 1 : 2;
+  switch (MmxEarthXMaterial(section, x, y)) {
+    case 'G': return shade == 0 ? MmxEarthRgb(4, 12, 6) :
+        shade == 1 ? MmxEarthRgb(6, 19, 9) : MmxEarthRgb(11, 24, 12);
+    case 'T': return shade == 0 ? MmxEarthRgb(13, 12, 6) :
+        shade == 1 ? MmxEarthRgb(20, 18, 9) : MmxEarthRgb(25, 23, 13);
+    case 'C': return shade == 0 ? MmxEarthRgb(17, 23, 25) :
+        shade == 1 ? MmxEarthRgb(24, 28, 30) : MmxEarthRgb(28, 30, 31);
+    default: return shade == 0 ? MmxEarthRgb(1, 5, 13) :
+        shade == 1 ? MmxEarthRgb(2, 10, 21) : MmxEarthRgb(5, 16, 26);
   }
-
-  /* A short cloud band bends over each plate instead of repeating as a flat
-   * palette stripe. Keep the cloud colors distinct from the ocean highlights. */
-  unsigned wx = MmxEarthMod(MmxEarthFloorDiv(x + (int)p, 3), 18);
-  unsigned wave = MmxEarthMod(y + (int)p * 2 + (int)(wx < 9 ? wx : 18 - wx) / 2, 16);
-  if (wave == 1 || wave == 2)
-    return wave == 1 ? MmxEarthRgb(27, 29, 30) : MmxEarthRgb(17, 25, 30);
-
-  /* Small white, stepped storm curls: an eye and a three-sided spiral. */
-  unsigned sx = MmxEarthMod(MmxEarthFloorDiv(x + (int)p * 2, 2), 16);
-  unsigned sy = MmxEarthMod(MmxEarthFloorDiv(y + (int)p, 2), 12);
-  int swirl = (sx == 5 && sy == 4) || (sx == 6 && sy == 4) ||
-      (sx == 7 && sy == 4) || (sx == 7 && sy == 5) ||
-      (sx == 7 && sy == 6) || (sx == 6 && sy == 6) ||
-      (sx == 5 && sy == 6) || (sx == 4 && sy == 6) ||
-      (sx == 4 && sy == 5);
-  if (swirl) return MmxEarthRgb(29, 30, 31);
-  return ocean;
 }
 
 #endif

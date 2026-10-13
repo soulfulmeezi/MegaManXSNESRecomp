@@ -829,7 +829,9 @@ static void sprite(const Ppu *p, const Raster *r, int x, int sy, unsigned attr, 
         uint16_t color = (uint16_t)(object_color[dest] >= 0 ?
             object_color[dest] : r->palette[(z | pixel) & 255]);
         int local_x = x + c - earth->origin_x;
-        int local_y = sy + row - earth->origin_y;
+        /* row has already been flipped for tile decoding. Surface coordinates
+         * follow the displayed body, independent of that tile-storage choice. */
+        int local_y = y - earth->origin_y;
         if (earth->facing_left) local_x = -local_x;
         unsigned section = earth_x_section(earth->object, local_x, local_y);
         object_color[dest] = MmxEarthXFaceDetail(earth->object,section,local_x,local_y) ? color :

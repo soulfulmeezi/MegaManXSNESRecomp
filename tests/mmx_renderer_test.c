@@ -1162,6 +1162,41 @@ static void sprite_priority_and_cutscene_binding(void) {
   g_mmx_custom_renderer = false; MmxRendererReset();
 }
 
+static void earth_x_surface_coordinates(void) {
+  /* Run with the synthetic Zero assets still loaded so the Earth path is
+   * active. A uniform native tile isolates surface placement from tile art. */
+  MmxZeroState state={0}; state.active_x=1; MmxZeroSetState(state);
+  uint32_t reference[64];
+  for(unsigned variant=0;variant<4;++variant) {
+    memset(&ppu,0,sizeof(ppu)); memset(ram,0,sizeof(ram));
+    MmxRendererReset(); MmxRendererSetRom(rom_bytes,sizeof(rom_bytes));
+    g_mmx_custom_renderer=true; g_mmx_render_asset_repairs=true;
+    ram[0xd1]=2; ram[0xd2]=ram[0xd3]=4;
+    int x=variant==2?60:variant==3?33:40, y=variant==2?50:40;
+    put_word(0xbad,variant==2?60:40); put_word(0xbb0,variant==2?58:48);
+    if(variant==3) ram[0xbb9]=64;
+    ppu.inidisp=15; ppu.bgmode=1; ppu.screenEnabled[0]=16;
+    ppu.cgram[129]=4|(10<<5)|(27<<10);
+    for(unsigned i=0;i<128;++i) ppu.oam[i*2]=0xe000;
+    for(unsigned row=0;row<8;++row) ppu.vram[row]=255;
+    unsigned attr=variant==1?0xa000:variant==3?0x6000:0x2000;
+    ppu.oam[32]=(uint16_t)((y<<8)|x); ppu.oam[33]=(uint16_t)attr;
+    put_word(0,x); put_word(2,y); put_word(0x18,0x8000);
+    ram[0x1a]=0x80; ram[0xf]=(uint8_t)(attr>>8);
+    MmxRendererObserveObject(ram,0xba8); MmxRendererRecordPiece(ram,0);
+    MmxRendererLatchSprites(); capture();
+    MmxRenderView view={256,0,4.0/3.0}; assert(MmxRendererDraw(output,view,false));
+    unsigned different=0;
+    for(int row=0;row<8;++row) for(int col=0;col<8;++col) {
+      uint32_t pixel=output[(y+row)*256+x+col]; assert(pixel!=0);
+      if(!variant) reference[row*8+col]=pixel;
+      else assert(pixel==reference[row*8+(variant==3?7-col:col)]);
+      different+=pixel!=reference[0];
+    }
+    assert(different>0); /* The Earth pattern actually ran. */
+  }
+}
+
 static void zero_blink_submission(void) {
   /* A submitted body belongs to the OAM epoch even if the next player update
    * has already cleared its visibility flag. It must never turn back into X. */
@@ -1214,6 +1249,7 @@ static void zero_blink_submission(void) {
   /* An actual blink hides OAM; stale attribution must preserve that gap. */
   ppu.oam[32] = 0xe000; MmxRendererLatchSprites(); capture();
   assert(MmxRendererDraw(output,view,false) && output[40 * 256 + 40] == 0);
+  earth_x_surface_coordinates();
   MmxZeroDisable(); g_mmx_custom_renderer = false; g_mmx_render_asset_repairs = true;
   MmxRendererReset();
 }
