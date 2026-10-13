@@ -79,7 +79,7 @@ static void jupiter_planet_masks_replace_sprite_panels(void) {
   palette[20]=rgb(2,21,5);   /* green gem */
   palette[21]=rgb(24,24,24); /* secondary metallic panel */
   palette[22]=rgb(3,4,24);   /* blue visor / eye */
-  palette[23]=rgb(15,15,15); /* metallic seam */
+  palette[23]=rgb(12,12,12); /* interior metallic seam */
   /* A tiny fictional Zero sprite: a head, golden hair and a torso with
    * two different metal source shades and a black vertical suit panel. */
   for(unsigned y=20;y<=23;++y) for(unsigned x=58;x<=67;++x)
