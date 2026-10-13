@@ -1126,11 +1126,15 @@ static void coop_partner_row(const Ppu *ppu,const Raster *r,int y,MmxRenderView 
     unsigned priority = ((ram[0xbb9]>>4 & 3)*4+2)<<12;
     if (body && row>=0 && row<128 && (!pilot || (row>=44 && row<64))) for (int col=0;col<128;++col) {
       unsigned pixel = body[row*128+col];
-      if (blade && blade[row*128+col]) pixel = blade[row*128+col];
+      unsigned blade_pixel=blade ? blade[row*128+col] : 0;
+      if (blade_pixel) pixel=blade_pixel;
       int dest = x + ((ram[0xbb9]&64) ? 63-col : col-64) + view.extra;
       if (pixel && dest>=0 && dest<view.width) {
         objects[dest] = (uint16_t)(priority|0x680|(pixel&15));
-        colors[dest] = pixel>=16 && pixel<32 ? MmxZeroBodyColors(&partner->zero)[pixel-16] : MmxZeroColors()[pixel];
+        uint16_t base=pixel>=16 && pixel<32 ?
+            MmxZeroBodyColors(&partner->zero)[pixel-16] : MmxZeroColors()[pixel];
+        colors[dest]=blade_pixel ? base :
+            MmxZeroJupiterStripeColor(body,pixel,(unsigned)col,(unsigned)row,base);
       }
       if (charge && charge[row*128+col] && dest>=0 && dest<view.width) {
         unsigned pixel = charge[row*128+col];
@@ -1501,7 +1505,9 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
             unsigned z = ((((s.attr >> 12) & 3) * 4 + 2) << 12) | 0x680;
             for (int col = 0; col < MMX_ZERO_WIDTH; ++col) {
               unsigned pixel = body[row * MMX_ZERO_WIDTH + col];
-              if (!menu_body && blade && blade[row * MMX_ZERO_WIDTH + col]) pixel = blade[row * MMX_ZERO_WIDTH + col];
+              unsigned blade_pixel=!menu_body && blade ?
+                  blade[row * MMX_ZERO_WIDTH + col] : 0;
+              if (blade_pixel) pixel=blade_pixel;
               int dx = zx + ((!menu_body && (frame.ram[0xbb9] & 64)) ? 63 - col : col - 64) + view.extra;
               if (pixel && dx >= 0 && dx < view.width) {
                 objects[dx] = (uint16_t)(z | (pixel & 15));
@@ -1513,8 +1519,12 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
                 if (sting) {
                   objects[dx] = (uint16_t)((z & ~255u) | (144 + sting_shade[pixel - 16]));
                   object_colors[dx] = -1; /* Live CGRAM already includes fades. */
-                } else object_colors[dx] = !menu_body && pixel >= 16 && pixel < 32 ?
-                    MmxZeroBodyColors(&frame_zero)[pixel - 16] : colors[pixel];
+                } else {
+                  uint16_t base=!menu_body && pixel >= 16 && pixel < 32 ?
+                      MmxZeroBodyColors(&frame_zero)[pixel - 16] : colors[pixel];
+                  object_colors[dx]=menu_body || pilot || blade_pixel ? base :
+                      MmxZeroJupiterStripeColor(body,pixel,(unsigned)col,(unsigned)row,base);
+                }
               }
             }
           }
