@@ -6,18 +6,23 @@
 static uint16_t rgb(unsigned r,unsigned g,unsigned b) {
   return (uint16_t)(r|(g<<5)|(b<<10));
 }
-static void yellow_black_is_selective(void) {
-  uint16_t highlight=rgb(31,5,3);
-  uint16_t medium=rgb(22,3,4);
-  uint16_t shadow=rgb(13,1,2);
-  assert(MmxFutureZeroYellowBlack(highlight)==rgb(31,28,2));
-  assert(MmxFutureZeroYellowBlack(medium)==rgb(22,19,2));
-  assert(MmxFutureZeroYellowBlack(shadow)==rgb(4,4,4));
-  assert(MmxFutureZeroYellowBlack(rgb(31,26,4))==rgb(31,26,4)); /* hair */
-  assert(MmxFutureZeroYellowBlack(rgb(31,18,13))==rgb(31,18,13)); /* skin */
-  assert(MmxFutureZeroYellowBlack(rgb(2,21,5))==rgb(2,21,5)); /* gem */
-  assert(MmxFutureZeroYellowBlack(rgb(3,3,3))==rgb(3,3,3)); /* outline */
-  assert(MmxFutureZeroYellowBlack(rgb(3,4,24))==rgb(3,4,24)); /* charge blue */
+static void jupiter_palette_is_selective(void) {
+  /* All seven red shades use Jupiter's cloudy SNES BGR555 ramp. */
+  assert(MmxFutureZeroJupiter(rgb(31,5,3))==rgb(29,28,26)); /* cream white */
+  assert(MmxFutureZeroJupiter(rgb(28,4,3))==rgb(27,25,22)); /* pale cloud */
+  assert(MmxFutureZeroJupiter(rgb(25,4,3))==rgb(25,21,16)); /* sand */
+  assert(MmxFutureZeroJupiter(rgb(22,3,4))==rgb(23,16,10)); /* orange belt */
+  assert(MmxFutureZeroJupiter(rgb(19,3,2))==rgb(19,12,8)); /* bronze */
+  assert(MmxFutureZeroJupiter(rgb(16,2,1))==rgb(13,9,6));  /* deep brown */
+  assert(MmxFutureZeroJupiter(rgb(13,1,2))==rgb(6,5,4));   /* charcoal */
+  /* Do not recolor blonde hair, skin, gem, neutral undersuit,
+   * blue charge effects or other sprites' near-red shading. */
+  assert(MmxFutureZeroJupiter(rgb(31,26,4))==rgb(31,26,4)); /* hair */
+  assert(MmxFutureZeroJupiter(rgb(31,18,13))==rgb(31,18,13)); /* skin */
+  assert(MmxFutureZeroJupiter(rgb(2,21,5))==rgb(2,21,5)); /* gem */
+  assert(MmxFutureZeroJupiter(rgb(3,3,3))==rgb(3,3,3)); /* outline */
+  assert(MmxFutureZeroJupiter(rgb(3,4,24))==rgb(3,4,24)); /* charge blue */
+  assert(MmxFutureZeroJupiter(rgb(10,0,0))==rgb(10,0,0)); /* too dark */
 }
 static void no_rush_and_camera_are_continuous(void) {
   assert(MmxCpuSafeFollowLimit(false)==224);
@@ -48,9 +53,9 @@ static void vertical_jump_has_no_horizontal_input(void) {
   assert(MmxCpuSafeFollowJumpPad(-1,0x40,0x80,1)==0x41);
 }
 int main(void) {
-  yellow_black_is_selective();
+  jupiter_palette_is_selective();
   no_rush_and_camera_are_continuous();
   vertical_jump_has_no_horizontal_input();
-  puts("Future Zero color & safe-follow: 3 test groups passed");
+  puts("Jupiter Zero palette & safe-follow: 3 test groups passed");
   return 0;
 }
