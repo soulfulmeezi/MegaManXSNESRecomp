@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include "mmx_future_zero_color.h"
 #include "mmx_zero_jupiter_stripes.h"
+#include "mmx_zero_jupiter_shell.h"
 #include "mmx_cpu_safe_follow.h"
 static uint16_t rgb(unsigned r,unsigned g,unsigned b) {
   return (uint16_t)(r|(g<<5)|(b<<10));
@@ -45,6 +46,28 @@ static void jupiter_cloud_belts_are_pose_local(void) {
   assert(MmxZeroJupiterStripePixel(red,base,128,38,30)==base);
   assert(MmxZeroJupiterStripePixel(red,base,0,128,30)==base);
 }
+static void jupiter_shell_is_clouds_not_metal(void) {
+  uint16_t silver=rgb(24,24,24), red=rgb(25,4,3);
+  uint16_t white=rgb(29,28,26);
+  assert(MmxJovianMaterial(silver,60,37)); /* silver plate becomes cloud */
+  assert(MmxJovianMaterial(red,60,37));
+  assert(MmxJovianMaterial(rgb(2,21,5),60,37)); /* green chest gem */
+  assert(!MmxJovianMaterial(rgb(31,18,13),60,37)); /* facial skin */
+  assert(!MmxJovianMaterial(rgb(31,26,4),32,37)); /* blond hair */
+  assert(MmxJovianMaterial(rgb(31,26,4),90,37)); /* golden boot */
+  assert(!MmxJovianMaterial(rgb(3,3,3),60,37)); /* black suit */
+  assert(!MmxJovianMaterial(rgb(3,4,24),60,37)); /* blue eye / face */
+  uint16_t cloud=MmxJovianShellColor(silver,silver,50,30,20,37);
+  uint16_t storm=MmxJovianShellColor(silver,silver,50,37,20,37);
+  assert(cloud!=silver && storm!=silver && cloud!=storm);
+  /* Two different metallic colors on a single material band are equal:
+   * the original panel-by-panel silver shading has been replaced. */
+  assert(cloud==MmxJovianShellColor(white,white,50,30,20,37));
+  assert(MmxJovianShellColor(rgb(31,18,13),rgb(31,18,13),50,30,20,37)==rgb(31,18,13));
+  assert(MmxJovianShellColor(rgb(3,3,3),rgb(3,3,3),50,30,20,37)==rgb(3,3,3));
+  /* Same Zero-pose coordinate gives same color, independently of camera. */
+  assert(cloud==MmxJovianShellColor(silver,silver,50,30,20,37));
+}
 static void no_rush_and_camera_are_continuous(void) {
   assert(MmxCpuSafeFollowLimit(false)==224);
   assert(MmxCpuSafeFollowLimit(true)==288);
@@ -76,8 +99,9 @@ static void vertical_jump_has_no_horizontal_input(void) {
 int main(void) {
   jupiter_palette_is_selective();
   jupiter_cloud_belts_are_pose_local();
+  jupiter_shell_is_clouds_not_metal();
   no_rush_and_camera_are_continuous();
   vertical_jump_has_no_horizontal_input();
-  puts("Jupiter Zero stripes & safe-follow: 4 test groups passed");
+  puts("Jupiter shell & safe-follow: 5 test groups passed");
   return 0;
 }
