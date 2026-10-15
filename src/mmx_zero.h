@@ -10,6 +10,8 @@ enum { MMX_ZERO_WIDTH = 128, MMX_ZERO_HEIGHT = 128, MMX_ZERO_POSES = 152, MMX_ZE
        MMX_ZERO_HEALTH_STATE_SIZE = 40 };
 typedef struct MmxZeroModernState {
   uint8_t enabled, jump_used, dash_used, dash_ticks;
+  /* slash_buffer: low 3 bits queued taps (0..7), bit 3 previous held Attack.
+   * reserved: bit 0 cosmic saber active. Layout/snapshot size unchanged. */
   uint8_t dash_facing, slash_buffer, hit_phase, reserved;
 } MmxZeroModernState;
 typedef struct MmxZeroState {
@@ -89,6 +91,9 @@ void MmxZeroSetStartCharacter(bool x);
 /* Shared launcher preference; X3 behavior remains the default. */
 void MmxZeroSetModern(bool enabled);
 bool MmxZeroModern(void);
+/* Physical DualSense R2 state, supplied once per host frame before game ticks. */
+void MmxZeroSetCosmicTrigger(bool held);
+bool MmxZeroCosmicTriggerHeld(void);
 void MmxZeroMovementTick(uint8_t ram[0x20000]);
 void MmxZeroPlayerMotion(uint8_t ram[0x20000], unsigned object);
 void MmxZeroCancel(uint8_t ram[0x20000]);

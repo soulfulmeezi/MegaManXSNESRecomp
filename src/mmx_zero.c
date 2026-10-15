@@ -30,6 +30,9 @@ static uint16_t hud_colors[16];
 static uint8_t animation[MMX_ZERO_ANIMATION_BYTES];
 static uint8_t muzzle[MMX_ZERO_MUZZLE_BYTES];
 static MmxZeroState state;
+static bool cosmic_trigger_held;
+void MmxZeroSetCosmicTrigger(bool held) { cosmic_trigger_held=held; }
+bool MmxZeroCosmicTriggerHeld(void) { return cosmic_trigger_held; }
 static void (*storm_emitter)(uint8_t *);
 void MmxZeroSetStormEmitter(void (*emit)(uint8_t *)) { storm_emitter=emit; }
 bool MmxZeroStormSlash(const MmxZeroState *s) {
@@ -37,7 +40,8 @@ bool MmxZeroStormSlash(const MmxZeroState *s) {
 }
 uint16_t MmxZeroStormBladeColor(const MmxZeroState *s,uint16_t original) {
   unsigned r=original&31,g=(original>>5)&31,b=(original>>10)&31;
-  if(!MmxZeroStormSlash(s) || g<12 || g<r || g<b) return original;
+  if(!MmxZeroStormSlash(s) || (s->modern.enabled && !(s->modern.reserved&1)) ||
+      g<12 || g<r || g<b) return original;
   if(r+g+b>64) return MmxCosmicRgb(31,30,26);
   return s->combo==2 ? MmxCosmicRgb(29,15,6) :
       s->combo==1 ? MmxCosmicRgb(26,21,13) : MmxCosmicRgb(18,24,28);
@@ -72,7 +76,7 @@ bool MmxZeroValidState(const MmxZeroState *value) {
   return s.combo <= 2 && s.slash <= 44 && s.charge <= 201 &&
       s.modern.enabled <= 1 && s.modern.jump_used <= 1 && s.modern.dash_used <= 1 &&
       s.modern.dash_ticks <= 18 && (s.modern.dash_facing == 0 || s.modern.dash_facing == 64) &&
-      s.modern.slash_buffer <= 6 && s.modern.hit_phase <= 1 && !s.modern.reserved &&
+      s.modern.slash_buffer <= 15 && s.modern.hit_phase <= 1 && s.modern.reserved <= 1 &&
       s.active_x <= 1 && s.swap_phase <= 6 && s.swap_tick <= 30 && s.swap_y <= 0 && s.swap_y >= -320 &&
       s.hp_valid <= 1 && s.hp_max <= 32 && s.hp[0] <= 32 && s.hp[1] <= 32 &&
       (!s.hp_valid || (s.hp_max >= 16 && s.hp[0] <= s.hp_max && s.hp[1] <= s.hp_max)) &&
@@ -550,7 +554,7 @@ void MmxZeroCancel(uint8_t ram[0x20000]) {
   memset(&state, 0, MMX_ZERO_LEGACY_STATE_SIZE);
   memset((uint8_t *)&state + MMX_ZERO_ANIMATION_STATE_SIZE, 0,
          MMX_ZERO_COMBAT_STATE_SIZE - MMX_ZERO_ANIMATION_STATE_SIZE);
-  state.modern.slash_buffer = state.modern.hit_phase = 0;
+  state.modern.slash_buffer = state.modern.hit_phase = state.modern.reserved = 0;
 }
 static unsigned free_projectile(const uint8_t *r) {
   for (unsigned d = 0x1228; d < 0x1428; d += 64)
@@ -799,43 +803,71 @@ void MmxZeroPlayerTick(uint8_t r[0x20000]) {
       !state.combo && !state.burst && !state.slash) return;
   if (!playable) { MmxZeroCancel(r); return; }
   bool held = (r[0xbdf] & 64) != 0, pressed = (r[0xbe3] & 64) != 0;
-  /* Classic X3 keeps its buster. Down + Shoot opens the storm combo;
-   * subsequent fresh Shoot presses chain it. Modern keeps direct Shoot. */
-  if(!modern_behavior && !state.slash && !state.burst && pressed && (r[0xbdf]&4)) {
-    if(start_slash(r)) {
+  /* Classic X3 keeps its buster. R2 + Shoot opens the storm combo;
+   * subsequent distinct Shoot presses chain it. Modern keeps direct Shoot. */
+  if(!modern_behavior && !state.slash && !state.burst) {
+    bool fresh_press=pressed && !(state.modern.slash_buffer&8);
+    /* Track Attack release even while charging the original X3 buster. */
+    state.modern.slash_buffer=held ? 8 : 0;
+    if(fresh_press && MmxZeroCosmicTriggerHeld() && start_slash(r)) {
       state.saber_ready=1;
+      state.modern.reserved=1;
+      state.modern.slash_buffer=held ? 8 : 0;
       r[0xbdf]&=(uint8_t)~64;r[0xbe3]&=(uint8_t)~64;
       goto slash_update;
     }
   }
   if (modern_behavior || MmxZeroStormSlash(&state)) {
-    /* Movement takes priority over an ongoing direct swing. Preserve the
-     * native jump and ladder inputs instead of masking them into a forced
-     * pose. Air-dash/double-jump cancellation happens in MovementTick. */
+    /* The SNES fresh edge alone can be synthesized while Attack is held.
+     * Serialize our own release latch: a held button cannot auto-repeat. */
+    unsigned previous=state.modern.slash_buffer & 8;
+    bool fresh_press=pressed && !previous;
+    unsigned queued=state.modern.slash_buffer & 7;
+    state.modern.slash_buffer=(uint8_t)(queued | (held ? 8 : 0));
+    /* Movement still cancels safely without stealing jump/dash inputs. */
     if(state.slash && ((r[0xbdf]&8) || ((r[0xbd3]&4) &&
         ((r[0xbe3]&128) || (r[0xbe2]&128))))) {
       MmxZeroCancel(r);
+      state.modern.slash_buffer=held ? 8 : 0;
       r[0xbdf]&=(uint8_t)~64;r[0xbe3]&=(uint8_t)~64;
       return;
     }
-    /* Advance the authored timeline twice per simulation tick for a snappy
-     * combo; keep native hit phases, save layout and damage unchanged. */
     state.charge = state.charge_phase = 0;
     state.burst = state.burst_end = 0;
-    if (state.slash && pressed && state.slash >= 3 && state.combo<2)
-      state.modern.slash_buffer = 1;
+    if (state.slash && fresh_press) {
+      if ((state.modern.slash_buffer&7)<7) ++state.modern.slash_buffer;
+      /* Multiple rapid distinct taps buffer multiple swings, capped at seven. */
+      if (MmxZeroCosmicTriggerHeld()) state.modern.reserved|=1;
+    }
     if (state.slash) {
-      state.slash+=2;
-      if (state.slash == 23 || state.slash == 24) state.slash = 26;
-      else if (state.slash == 32) state.slash = 37;
-      bool queued=state.modern.slash_buffer && state.combo<2;
-      if (state.slash > 44 || (queued && state.slash>=32)) {
-        unsigned next=state.combo+1;
+      /* Slash 1/2 advance briskly. The third recovers slowly into its
+       * final sheath pose unless an extra press requests a fast restart. */
+      unsigned step=state.combo==2 && state.slash>=29 ? 1 : 2;
+      state.slash=(uint16_t)(state.slash+step);
+      unsigned pending=state.modern.slash_buffer&7;
+      bool combo_queued=pending!=0;
+      /* Never cancel before the active hit and finisher emission. */
+      unsigned cancel_age=state.combo==2 ? 26 : 21;
+      if (state.slash > 44 || (combo_queued && state.slash>=cancel_age)) {
+        unsigned next=state.combo==2 ? 0 : state.combo+1;
+        unsigned held_latch=state.modern.slash_buffer&8;
+        unsigned cosmic=state.modern.reserved&1;
+        bool chain=combo_queued && state.slash>=cancel_age;
+        bool classic_storm=!modern_behavior && state.saber_ready;
         MmxZeroCancel(r);
+        state.modern.slash_buffer=(uint8_t)held_latch;
         if (r[0xbd3] & 4) r[0xbab] = 0;
-        if (queued && start_slash(r)) {state.combo=(uint8_t)next;state.saber_ready=1;}
+        if (chain && start_slash(r)) {
+          state.combo=(uint8_t)next;
+          state.saber_ready=classic_storm ? 1 : (next!=0);
+          state.modern.reserved=(uint8_t)(cosmic | (MmxZeroCosmicTriggerHeld()?1:0));
+          state.modern.slash_buffer=(uint8_t)(held_latch | (pending - 1));
+        }
       }
-    } else if (pressed) start_slash(r);
+    } else if (fresh_press && start_slash(r)) {
+      state.modern.reserved=MmxZeroCosmicTriggerHeld() ? 1 : 0;
+      state.modern.slash_buffer=held ? 8 : 0;
+    }
     clear_charge(r);
     r[0xbdf] &= (uint8_t)~64; r[0xbe3] &= (uint8_t)~64;
     goto slash_update;
@@ -927,7 +959,8 @@ slash_update:
        * hit_phase is serialized, so restores cannot duplicate the finisher. */
       if (state.slash >= 7 && !state.modern.hit_phase) {
         state.modern.hit_phase = 1;
-        if(state.combo==2 && storm_emitter) storm_emitter(r);
+        if(state.combo==2 && storm_emitter &&
+            (!modern_behavior || (state.modern.reserved&1))) storm_emitter(r);
       }
     }
     r[0xbde] = 0; r[0xbe2] = r[0xbe3] = 0;

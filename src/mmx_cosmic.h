@@ -84,33 +84,174 @@ static inline uint16_t MmxCosmicLitColor(uint16_t base,unsigned earth,unsigned s
 }
 /* Distant Highway ambience. The caller applies this only to the original
  * BG2 layer, behind terrain, actors and HUD, before native fades/windows. */
+static inline int MmxWrapPositive(int value,int period) {
+  value%=period;
+  return value<0?value+period:value;
+}
+static inline int MmxDistantTrafficPixel(int x,int y,unsigned tick) {
+  /* Tiny skyline hovercars replace isolated headlight dots. */
+  static const int lane_y[2]={115,141};
+  for(unsigned lane=0;lane<2;++lane) {
+    int ly=y-lane_y[lane];
+    if(ly<-1 || ly>1) continue;
+    int traffic=(x+(lane==0?(int)(tick/2):-(int)(tick/3)))&127;
+    for(unsigned i=0;i<2;++i) {
+      int dx=traffic-(i?73:12);
+      if(dx<0 || dx>5) continue;
+      if(ly==0) {
+        if(dx==0 || dx==5) return MmxCosmicRgb(23,22,16);
+        if(dx==1 || dx==4) return MmxCosmicRgb(13,19,24);
+        return dx==2?MmxCosmicRgb(18,21,23):MmxCosmicRgb(8,11,14);
+      }
+      if(ly==-1 && dx>=1 && dx<=4) return (dx==2||dx==3)?MmxCosmicRgb(10,14,18):MmxCosmicRgb(6,8,11);
+      if(ly==1 && dx>=1 && dx<=4) return (5| (7u<<5) | (10u<<10));
+    }
+  }
+  return -1;
+}
+
+static inline int MmxLowerRoadColor(uint16_t c);
+
+static inline int MmxLowerStreetPixel(int x,int y,unsigned tick,uint16_t base) {
+  if(!MmxLowerRoadColor(base) || y<164 || y>223) return -1;
+  /* Background highway lanes: opposing traffic on straightaways. */
+  struct Lane { int y0,h,w,period,speed,offset,count; uint16_t roof,body,light,shadow; };
+  static const struct Lane lanes[] = {
+    {170,3,8,96,  1, 17, 4, 19023, 15720, 5398,  8388},
+    {187,5,14,96, -2, 43, 4, 21170, 16777, 4283, 9445},
+    {206,3,9,96,   2, 71, 4, 21038, 12583,  32295, 7332},
+    {219,3,9,96,  -1, 29, 4, 21072, 13640, 6398,  7332}
+  };
+  for(unsigned li=0;li<sizeof(lanes)/sizeof(lanes[0]);++li) {
+    const struct Lane *L=&lanes[li];
+    int row=y-L->y0;
+    if(row<0 || row>=L->h) continue;
+    int scroll=x + (int)((long long)tick * (long long)L->speed / 2);
+    int local=MmxWrapPositive(scroll + L->offset,L->period);
+    for(int car=0;car<L->count;++car) {
+      int dx=local - (8 + car*(L->period/L->count));
+      if(dx<0 || dx>=L->w) continue;
+      if(L->h==5) {
+        if(row==0 && dx>=2 && dx<=11) return dx<4 || dx>9?L->body:L->roof;
+        if(row==1 && dx>=1 && dx<=12) {
+          if(dx==1 || dx==12) return L->light;
+          if(dx>=4 && dx<=9) return L->roof;
+          return L->body;
+        }
+        if(row==2 && dx>=2 && dx<=11) return dx<4 || dx>9?L->shadow:L->body;
+        if(row==3 && dx>=3 && dx<=10) return L->shadow;
+        if(row==4 && dx>=5 && dx<=8 && ((dx+(int)tick)&1)==0) return MmxCosmicRgb(3,8,12);
+      } else {
+        if(row==0 && dx>=1 && dx<L->w-1) return dx==L->w-2?L->light:L->roof;
+        if(row==1 && dx>=0 && dx<L->w) return (dx==0 || dx==L->w-1)?L->light:L->body;
+        if(row==2 && dx>=1 && dx<L->w-1) return dx>2 && dx<L->w-3?L->shadow:L->body;
+      }
+    }
+  }
+  /* Curved on/off-ramps: traffic enters/exits along the bend instead of sliding flat. */
+  struct Ramp { int range,speed,offset,dir,base_y,slope,curve; uint16_t roof,body,light,shadow; };
+  static const struct Ramp ramps[] = {
+    /* lower-left entry curve -> flows left to right */
+    {160, 2, 13,  1, 216, -1, -3, 21137, 15720, 4283, 8388},
+    /* central diagonal ramp -> flows right to left */
+    {148, 2, 57, -1, 188, -1,  0, 24275, 17834,31304, 10469},
+    /* right-side exit curve -> flows right to left */
+    {152, 2, 91, -1, 176,  1,  3, 23218, 16777, 6398,  8388}
+  };
+  for(unsigned ri=0;ri<sizeof(ramps)/sizeof(ramps[0]);++ri) {
+    const struct Ramp *R=&ramps[ri];
+    for(int car=0;car<3;++car) {
+      int t=MmxWrapPositive((int)(tick*R->speed) + R->offset + car*(R->range/3), R->range);
+      int px,py;
+      if(ri==0) {
+        px=-24 + t;
+        py=R->base_y - t/6 + (t*t)/220;
+      } else if(ri==1) {
+        px=260 - t;
+        py=R->base_y - t/4;
+      } else {
+        px=340 - t;
+        int q=152-t;
+        py=R->base_y + q/8 + (q*q)/260;
+      }
+      int dx=x-px,dy=y-py;
+      if(dx<0 || dx>=12 || dy<0 || dy>=5) continue;
+      if(dy==0 && dx>=3 && dx<=9) return dx<5 || dx>7?R->body:R->roof;
+      if(dy==1 && dx>=1 && dx<=10) return (dx==1 || dx==10)?R->light:(dx>=4 && dx<=7?R->roof:R->body);
+      if(dy==2 && dx>=2 && dx<=10) return dx<4 || dx>8?R->shadow:R->body;
+      if(dy==3 && dx>=3 && dx<=9) return R->shadow;
+      if(dy==4 && dx>=5 && dx<=7 && (((int)tick+dx+ri)&1)==0) return MmxCosmicRgb(3,8,12);
+    }
+  }
+  if(y>=176 && y<=179) {
+    int column=(x+32)&127;
+    if((column==22 || column==86) && (((tick/20)+x/64)&1)==0)
+      return y==176?MmxCosmicRgb(23,16,6):MmxCosmicRgb(11,8,6);
+  }
+  return -1;
+}
+
+static inline int MmxMidRoadColor(uint16_t c) {
+  unsigned r=c&31,g=(c>>5)&31,b=(c>>10)&31;
+  return r>=7 && r<=20 && g>=9 && g<=22 && b>=11 && b<=26 && b>=g && g+2>=r;
+}
+
+static inline int MmxNearRoadTrafficPixel(int x,int y,unsigned tick,uint16_t base) {
+  if(!MmxMidRoadColor(base) || y<108 || y>162) return -1;
+  struct FlatLane { int y0,h,w,period,speed,offset; uint16_t roof,body,light,shadow; };
+  static const struct FlatLane flats[] = {
+    {117,5,16,112, 2, 19, (20| (23u<<5) | (23u<<10)), (11| (14u<<5) | (18u<<10)), (29| (8u<<5) | (7u<<10)), (5| (7u<<5) | (10u<<10))},
+    {146,5,16,104,-2, 41, (19| (22u<<5) | (24u<<10)), (10| (13u<<5) | (18u<<10)), (8| (18u<<5) | (30u<<10)), (5| (7u<<5) | (10u<<10))}
+  };
+  for(unsigned li=0;li<sizeof(flats)/sizeof(flats[0]);++li) {
+    const struct FlatLane *L=&flats[li];
+    int row=y-L->y0;
+    if(row<0 || row>=L->h) continue;
+    int scroll=L->speed>=0 ? x + (int)(tick*(unsigned)L->speed/2) : x - (int)(tick*(unsigned)(-L->speed)/2);
+    int local=(scroll + L->offset) & (L->period-1);
+    for(unsigned car=0;car<3;++car) {
+      int dx=local - (car? (int)(car*(L->period/3) + 11) : 11);
+      if(dx<0 || dx>=L->w) continue;
+      if(row==0 && dx>=3 && dx<=12) return dx<5 || dx>10?L->body:L->roof;
+      if(row==1 && dx>=1 && dx<=14) {
+        if(dx==1 || dx==14) return L->light;
+        if(dx>=4 && dx<=11) return L->roof;
+        return L->body;
+      }
+      if(row==2 && dx>=2 && dx<=13) return dx<4 || dx>11?L->shadow:L->body;
+      if(row==3 && dx>=3 && dx<=12) return L->shadow;
+      if(row==4 && dx>=5 && dx<=9 && ((dx+(int)tick)&1)==0) return MmxCosmicRgb(3,8,12);
+    }
+  }
+  for(unsigned car=0;car<3;++car) {
+    int cx=((int)(tick*2) + 38 + (int)car*92)%336 - 24;
+    int cy=116 + cx/4;
+    int dx=x-cx,dy=y-cy;
+    if(dx>=0 && dx<12 && dy>=0 && dy<5) {
+      static const uint16_t roof=(20| (22u<<5) | (23u<<10)), body=(10| (13u<<5) | (17u<<10)),
+                            light=(28| (8u<<5) | (7u<<10)), shadow=(5| (7u<<5) | (10u<<10));
+      if(dy==0 && dx>=3 && dx<=9) return dx<5 || dx>7?body:roof;
+      if(dy==1 && dx>=1 && dx<=10) return (dx==1 || dx==10)?light:(dx>=4 && dx<=7?roof:body);
+      if(dy==2 && dx>=2 && dx<=10) return dx<4 || dx>8?shadow:body;
+      if(dy==3 && dx>=3 && dx<=9) return shadow;
+      if(dy==4 && dx>=5 && dx<=7) return MmxCosmicRgb(3,8,12);
+    }
+  }
+  return -1;
+}
+
 static inline int MmxCityActivityPixel(int x,int y,unsigned tick,uint16_t base) {
+
   unsigned r=base&31,g=(base>>5)&31,b=(base>>10)&31;
   int u=(x+(int)(tick/8))&255;
   int sky=r>=8 && r<=14 && g>=5 && g<=10 && b>=7 && b<=14 && r>g;
+  if(y>=88 && y<164) {
+    int nearer=MmxNearRoadTrafficPixel(x,y,tick,base);
+    if(nearer>=0) return nearer;
+  }
   if(y>=164 && y<224) {
-    /* Distant lower streets: emergency traffic, localized blasts, smoke and
-     * falling sparks. These pixels belong to BG2, behind highway pillars. */
-    unsigned cell=(unsigned)x>>7,phase=(tick+cell*83)%240;
-    int local=x&127,dx=local-58,dy=y-192;
-    int ax=dx<0?-dx:dx,ay=dy<0?-dy:dy;
-    if(phase<96) {
-      int radius=phase<24?2+(int)phase/2:14-(int)(phase-24)/6;
-      if(ax+ay<radius) return ax+ay<radius/2?MmxCosmicRgb(31,29,18):MmxCosmicRgb(28,12,4);
-      if(phase>12 && dy<0 && dy>-(int)(phase/2) && ax<3+(192-y)/6 &&
-          ((x+y+(int)phase/6)&3)!=0) return MmxCosmicRgb(8,8,10);
-    }
-    if(phase>=24 && phase<112 && local>=45 && local<=71) {
-      int fall=164+(int)((phase+local*7)%52);
-      if(y==fall && (local%7)==0) return MmxCosmicRgb(30,18,5);
-    }
-    if(y>=188 && y<=191) {
-      int car=(x+(int)(tick/2))&127;
-      if(car>=12 && car<=23) {
-        if(y==188) return (tick/10)&1?MmxCosmicRgb(27,5,4):MmxCosmicRgb(7,17,31);
-        return y==191?MmxCosmicRgb(8,10,14):MmxCosmicRgb(20,21,20);
-      }
-    }
+    int lower=MmxLowerStreetPixel(x,y,tick,base);
+    if(lower>=0) return lower;
   }
   if(sky && y>=16 && y<100) {
     int band=(y-16)/28, row=(y-16)%28;
@@ -119,11 +260,11 @@ static inline int MmxCityActivityPixel(int x,int y,unsigned tick,uint16_t base) 
     if(drift<96 && row>=curve && row<=curve+2 && ((drift+row)&3)!=0)
       return MmxCosmicRgb(r+3,g+3,b+3);
   }
-  /* Tiny pairs of headlights follow two distant traffic lanes. */
-  int lane=y==115 || y==141;
-  int traffic=(x+(y==115?(int)(tick/2):-(int)(tick/3)))&127;
-  if(lane && sky && (traffic==12 || traffic==15 || traffic==73 || traffic==76))
-    return MmxCosmicRgb(21,20,13);
+  /* Skyline traffic should read like actual tiny hovercars, not static dots. */
+  if(sky) {
+    int distant=MmxDistantTrafficPixel(x,y,tick);
+    if(distant>=0) return distant;
+  }
   /* Sparse building windows change slowly; never paint the open sky. */
   if(!sky && y>=70 && y<164 && r<12 && g<14 && b<16 &&
       (x&31)>=9 && (x&31)<=11 && (y&15)==6 &&
@@ -135,5 +276,7 @@ static inline int MmxCityActivityPixel(int x,int y,unsigned tick,uint16_t base) 
  * lane paint must occlude traffic instead of receiving painted-on cars. */
 static inline int MmxLowerRoadColor(uint16_t c) {
   unsigned r=c&31,g=(c>>5)&31,b=(c>>10)&31;
-  return r>=3 && r<=10 && g>=6 && g<=14 && b>=3 && b<=10 && g>=r+2 && g>b;
+  /* Only the darker lower-highway asphalt should qualify; exclude bright bridge deck/support colors. */
+  return r>=2 && r<=8 && g>=5 && g<=11 && b>=7 && b<=15 &&
+         g>=r+2 && b>=g-1 && (r+g+b)<=28;
 }

@@ -1,8 +1,10 @@
+#include "near_road_cases.h"
 #include "mmx_renderer.h"
 #include "mmx_render_assets.h"
 #include "mmx_zero.h"
 #include "mmx_weapon_combat.h"
 #include "mmx_cosmic.h"
+#include "mmx_traffic_telemetry.h"
 #include "mmx_hover_traffic.h"
 #include "mmx_knc_bugfix.h"
 #include <assert.h>
@@ -1204,6 +1206,7 @@ static void cosmic_combat(void) {
   memset(ram,0,sizeof(ram));memset(rom_bytes,0,sizeof(rom_bytes));
   memset(rom_bytes+0x37f80,255,32);MmxWeaponsCollisionRom(rom_bytes,sizeof(rom_bytes));
   MmxZeroSetStartCharacter(true);MmxZeroResetState();
+  MmxZeroSetCosmicTrigger(false); /* Explicit physical R2 input state. */
   MmxWeaponsSetCombatState((MmxWeaponCombatState){0});
   ram[0xd1]=2;ram[0xd2]=ram[0xd3]=4;ram[0xba9]=2;ram[0xbcf]=16;
   ram[0xbd3]=4;ram[0xc11]=64;put_word(0xbad,100);put_word(0xbb0,96);
@@ -1215,7 +1218,12 @@ static void cosmic_combat(void) {
   assert(!ram[0x1228] && (ram[0xbe3]&64)); /* Normal Shoot stays native. */
   assert(MmxWeaponsFinalDamage(ram,0xe68,0x1228,4)==11);
   assert(MmxWeaponsFinalDamage(ram,0xe68,0x1228,128)==128);
+  /* Down + Shoot without R2 must NOT spawn Earth Wave in v27+. */
   ram[0xbdf]=68;ram[0xbe3]=64;MmxWeaponsPlayerTick(ram);
+  assert(!MmxWeaponsGetCombatState().shots[0].active && (ram[0xbe3]&64));
+  /* In v27+, Earth Wave is R2 + a fresh Shoot press, NOT Down + Shoot. */
+  MmxZeroSetCosmicTrigger(true);
+  ram[0xbdf]=64;ram[0xbe3]=64;MmxWeaponsPlayerTick(ram);
   MmxWeaponCombatState saved=MmxWeaponsGetCombatState();
   assert(saved.shots[0].page==MMX_COSMIC_PAGE && saved.shots[0].weapon==MMX_EARTH_WAVE);
   assert(saved.shots[0].x==118*256 && saved.shots[0].y==102*256);
@@ -1229,10 +1237,11 @@ static void cosmic_combat(void) {
   put_word(0x20ee,1);MmxWeaponsPlayerTick(ram);MmxWeaponsProjectileTick(ram,0x1228,1);
   assert(!ram[0x1228]); /* A gap retires the ground wave. */
   put_word(0x20ee,0);
-  for(unsigned i=0;i<3;++i) {ram[0xbdf]=68;ram[0xbe3]=64;MmxWeaponsPlayerTick(ram);}
+  for(unsigned i=0;i<3;++i) {ram[0xbdf]=64;ram[0xbe3]=64;MmxWeaponsPlayerTick(ram);}
   saved=MmxWeaponsGetCombatState();assert(saved.shots[0].active && saved.shots[1].active && !saved.shots[2].active);
   assert(ram[0xbe3]&64); /* Full pool falls back to the normal weapon. */
   ++ram[0x1f7a];ram[0xbe3]=0;MmxWeaponsPlayerTick(ram);assert(!ram[0x1228] && !ram[0x1268]);
+  MmxZeroSetCosmicTrigger(false);
   MmxZeroSetStartCharacter(false);MmxZeroResetState();
   MmxWeaponsJupiterStorm(ram);saved=MmxWeaponsGetCombatState();
   assert(saved.shots[0].weapon==MMX_JUPITER_STORM && MmxWeaponsValidCombatState(&saved));
@@ -1252,10 +1261,39 @@ static void cosmic_combat(void) {
     int a=MmxCityActivityPixel(x,y,0,sky),b=MmxCityActivityPixel(x,y,120,sky);
     clouds+=a>=0 && y<100;traffic+=a>=0 && y>=100;motion+=a!=b;
     windows+=MmxCityActivityPixel(x,y,0,0)>=0;
-    lower_street+=a>=0 && y>=164;
+    lower_street+=MmxLowerStreetPixel(x,y,0,MmxCosmicRgb(6,8,10))>=0;
   }
   assert(clouds && traffic && windows && motion && lower_street);
   assert(MmxCityActivityPixel(58,224,0,0)<0);
+  {
+    unsigned tiny=0,tiny_motion=0;
+    for(int y=113;y<=142;++y) for(int x=0;x<256;++x) {
+      int a=MmxDistantTrafficPixel(x,y,0),b=MmxDistantTrafficPixel(x,y,60);
+      tiny+=a>=0;tiny_motion+=a!=b;
+      assert(a<32768 && b<32768);
+    }
+    assert(tiny>20 && tiny_motion>10);
+  }
+  {
+    unsigned lower=0,lower_motion=0;
+    for(int y=164;y<224;++y) for(int x=0;x<256;++x) {
+      uint16_t road=MmxCosmicRgb(6,8,10);
+      int a=MmxLowerStreetPixel(x,y,0,road),b=MmxLowerStreetPixel(x,y,90,road);
+      lower+=a>=0; lower_motion+=a!=b;
+      assert(a<32768 && b<32768);
+    }
+    assert(lower>60 && lower_motion>20);
+  }
+  {
+    unsigned near=0,near_motion=0;
+    uint16_t road=MmxCosmicRgb(12,14,18);
+    for(int y=88;y<164;++y) for(int x=0;x<256;++x) {
+      int a=MmxNearRoadTrafficPixel(x,y,0,road),b=MmxNearRoadTrafficPixel(x,y,80,road);
+      near+=a>=0; near_motion+=a!=b;
+      assert(a<32768 && b<32768);
+    }
+    assert(near>120 && near_motion>30);
+  }
   /* The silhouette must animate at a fixed origin, not merely translate. */
   for(unsigned kind=1;kind<=2;++kind) for(unsigned age=1;age<32;age+=2) {
     unsigned shape_changes=0,pixels=0;
@@ -1268,11 +1306,112 @@ static void cosmic_combat(void) {
     assert(pixels>=25 && shape_changes>=8);
   }
   assert(MmxCosmicLightStrength(0,0,9)==3);
-  assert(MmxLowerRoadColor(MmxCosmicRgb(5,9,7)));
+  assert(MmxLowerRoadColor(MmxCosmicRgb(6,8,10)));
   assert(!MmxLowerRoadColor(MmxCosmicRgb(15,24,13))); /* Pillar. */
   assert(!MmxLowerRoadColor(MmxCosmicRgb(10,7,10))); /* Sky. */
+  /* v33c overlay uses a native 3x5 font, never game sprite/OAM data. */
+  {
+    MmxTrafficTelemetry t={0};
+    char lines[5][40];
+    t.stage=0;t.phase=4;t.mode=2;t.gate=1;t.camera_x=0x035e;
+    t.camera_y=0x0120;t.bg2_stream_x=0x0420;t.bg2_stream_y=0x00b0;
+    t.ppu_bg2_x=0x0023;t.ppu_bg2_y=0x00b1;
+    t.bg2_world_x=0x0423;t.bg2_world_y=0x00b1;
+    MmxTrafficTelemetryText(lines,&t);
+    assert(strstr(lines[0],"ST:00 PH:04 MD:02 G:1"));
+    assert(strstr(lines[1],"CAM X:035E"));
+    assert(strstr(lines[2],"BG2 RAM:0420"));
+    assert(strstr(lines[3],"PPU BG2:0023"));
+    assert(strstr(lines[4],"BG2 WLD:0423"));
+    assert(MmxTrafficTelemetryGlyph('A',0)==7);
+    assert(MmxTrafficTelemetryGlyph('9',4)==7);
+    assert(MmxTrafficTelemetryGlyph('?',1)==0);
+    uint32_t pixels[256*224]={0};
+    MmxTrafficTelemetryDraw(pixels,256,&t);
+    assert(pixels[2*256+144]==0x19647c); /* bordered native panel */
+    assert(pixels[4*256+146]==0x071521); /* solid panel interior */
+    assert(pixels[44*256+200]==0);       /* outside panel untouched */
+  }
+  /* v33d: observed road-section test window, never sky/airship modes. */
+  assert(MMX_TRAFFIC_CAMERA_X_MIN==0x0500);
+  assert(MMX_TRAFFIC_CAMERA_X_MAX==0x1500);
+  static const unsigned observed_cameras[]={0x05b7,0x0718,0x0fce,0x148f};
+  for(unsigned i=0;i<sizeof(observed_cameras)/sizeof(observed_cameras[0]);++i)
+    assert(MmxTrafficDebugScene(0,4,observed_cameras[i],2));
+  for(unsigned camera=0;camera<=0x1600;++camera) {
+    int visible=MmxTrafficDebugScene(0,4,camera,2);
+    assert(visible==(camera>=MMX_TRAFFIC_CAMERA_X_MIN &&
+                      camera<=MMX_TRAFFIC_CAMERA_X_MAX));
+    assert(!MmxTrafficDebugScene(1,4,camera,2));
+    assert(!MmxTrafficDebugScene(0,2,camera,2));
+    assert(!MmxTrafficDebugScene(0,4,camera,0x0c));
+    assert(!MmxTrafficDebugScene(0,4,camera,4));
+  }
+  /* Reconstruct full BG2 world X through 256- and 1024-pixel page seams. */
+  for(int scroll=0x0ef;scroll<=0x1210;scroll+=7) {
+    assert(MmxTrafficBg2Scroll((unsigned)scroll,(unsigned)(scroll&1023))==scroll);
+    int world=MmxTrafficBg2Scroll((unsigned)scroll,(unsigned)(scroll&1023));
+    int a=MmxTrafficLaneY(0,world),b=MmxTrafficLaneY(0,world+1);
+    if(a>=0 && b>=0) assert(abs(a-b)<=1); /* no 3-pixel reset */
+  }
+  assert(abs(MmxTrafficLaneY(0,1023)-MmxTrafficLaneY(0,1024))<=1);
+  assert(abs(MmxTrafficLaneY(1,1023)-MmxTrafficLaneY(1,1024))<=1);
+  assert(MmxTrafficBg2Scroll(0x03fe,0x0002)==0x0402);
+  assert(MmxTrafficBg2Scroll(0x0402,0x03fe)==0x03fe);
+  /* Native BG2-space lane geometry / ordering / occlusion tests. */
+  assert(MMX_TRAFFIC_DEBUG_LANES==4);
+  assert(mmx_traffic_debug_lanes[0].id=='A' && mmx_traffic_debug_lanes[0].direction==1);
+  assert(mmx_traffic_debug_lanes[1].id=='B' && mmx_traffic_debug_lanes[1].direction==0);
+  assert(mmx_traffic_debug_lanes[2].id=='C' && mmx_traffic_debug_lanes[2].direction==1);
+  assert(mmx_traffic_debug_lanes[3].id=='D' && mmx_traffic_debug_lanes[3].direction==1);
+  for(unsigned lane=0;lane<MMX_TRAFFIC_DEBUG_LANES;++lane) {
+    const MmxTrafficDebugLane *p=mmx_traffic_debug_lanes+lane;
+    assert(p->count>=2);
+    for(unsigned i=1;i<p->count;++i) assert(p->points[i].x>p->points[i-1].x);
+    for(int x=p->points[0].x;x<=p->points[p->count-1].x;++x) {
+      int yy=MmxTrafficLaneY(lane,x);
+      assert(yy>=0 && yy<MMX_TRAFFIC_BG2_Y_PERIOD);
+      assert(MmxTrafficDebugLayerPixel(x,yy)>=0);
+      if(lane>=2) {
+        int xx=x+MMX_TRAFFIC_CURVE_SECOND_X_SHIFT;
+        assert(MmxTrafficLaneY(lane,xx)==yy);
+        assert(MmxTrafficDebugLayerPixel(xx,yy)>=0);
+      }
+    }
+  }
+  /* A/B: continuous at 256/1024-pixel seams, within native screen height. */
+  for(int x=MMX_TRAFFIC_ROAD_X_MIN;x<=MMX_TRAFFIC_ROAD_X_MAX;++x) {
+    int yA=MmxTrafficLaneY(0,x),yB=MmxTrafficLaneY(1,x);
+    assert(yA>=209 && yA<=211 && yB>=218 && yB<=220);
+    assert(yB>yA);
+    assert(MmxTrafficDebugCompositedPixel(x,yA,0,1)>=0);
+    assert(MmxTrafficDebugCompositedPixel(x,yA,1,1)==-1); /* pillar */
+    assert(MmxTrafficDebugCompositedPixel(x,yA,0,0)==-1); /* absent BG2 */
+    assert(MmxTrafficDebugCompositedPixel(x,yB,0,1)>=0);
+    if(x>MMX_TRAFFIC_ROAD_X_MIN) {
+      assert(abs(MmxTrafficLaneY(0,x)-MmxTrafficLaneY(0,x-1))<=1);
+      assert(abs(MmxTrafficLaneY(1,x)-MmxTrafficLaneY(1,x-1))<=1);
+    }
+  }
+  assert(MmxTrafficLaneY(0,MMX_TRAFFIC_ROAD_X_MIN-1)==-1);
+  assert(MmxTrafficLaneY(1,MMX_TRAFFIC_ROAD_X_MAX+1)==-1);
+  /* C/D must never wrap into an unrelated 1024px source page. */
+  assert(MmxTrafficLaneY(2,0x0070)==-1);
+  assert(MmxTrafficLaneY(2,0x0b80)==-1);
+  assert(MmxTrafficLaneY(3,0x0b80)==-1);
+  /* BG2 page scroll is the sole x basis, independent of camera position. */
+  for(int screen=8;screen<250;screen+=17) {
+    int world_x=MMX_TRAFFIC_ROAD_X_MIN+screen;
+    int sy=MmxTrafficLaneY(0,world_x)-1;
+    int a=MmxTrafficDebugScreenPixel(screen,sy,MMX_TRAFFIC_ROAD_X_MIN,0);
+    int b=MmxTrafficDebugScreenPixel(screen-37,sy,MMX_TRAFFIC_ROAD_X_MIN+37,0);
+    assert(a==b && a>=0);
+    int c=MmxTrafficDebugScreenPixel(screen,sy-9,MMX_TRAFFIC_ROAD_X_MIN,9);
+    assert(a==c);
+  }
   for(unsigned lane=0;lane<MMX_HOVER_LANES;++lane) {
-    const MmxHoverLane *p=&mmx_hover_lanes[lane];
+    MmxHoverLane lane_path=MmxHoverLaneAt(lane);
+    const MmxHoverLane *p=&lane_path;
     for(unsigned tick=0;tick<MMX_HOVER_CYCLE*2;++tick) {
       for(unsigned slot=0;slot<MMX_HOVER_PER_LANE;++slot) {
         MmxHoverCar car=MmxHoverPosition(lane,slot,tick);
@@ -1388,4 +1527,4 @@ static void weapons_menu_margins(void) {
   memset(stock, 0, sizeof(stock));
 }
 
-int main(void) { geometry(); raster_and_hud(); sprite_coordinates(); expanded_capacity(); background_resources(); dialogue_and_password(); highway_arena_sky(); highway_airship_binding(); distant_doors(); storm_background_prefill(); resource_decode(); spark_effects(); airport_panorama_edge(); wide_water_plane(); buried_submarine(); background_continuations(); launch_background_palettes(); sting_background_palettes(); mammoth_background_palettes(); dialogue_backdrop(); fortress_actor_presentation(); sprite_priority_and_cutscene_binding(); weapons_menu_margins(); zero_blink_submission(); return 0; }
+int main(void) { near_road_cases(); geometry(); raster_and_hud(); sprite_coordinates(); expanded_capacity(); background_resources(); dialogue_and_password(); highway_arena_sky(); highway_airship_binding(); distant_doors(); storm_background_prefill(); resource_decode(); spark_effects(); airport_panorama_edge(); wide_water_plane(); buried_submarine(); background_continuations(); launch_background_palettes(); sting_background_palettes(); mammoth_background_palettes(); dialogue_backdrop(); fortress_actor_presentation(); sprite_priority_and_cutscene_binding(); weapons_menu_margins(); zero_blink_submission(); return 0; }

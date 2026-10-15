@@ -93,13 +93,61 @@ static void modern_checks(void) {
   assert(!memcmp(before,ram,sizeof(ram))); /* X remains native. */
   MmxZeroSetModern(false); MmxZeroResetState(); player();
 }
+static void saber_tap(void) { tick(64,64);tick(0,0); }
+static void saber_press_flow_checks(void) {
+  MmxZeroSetModern(true);MmxZeroResetState();player();
+  MmxZeroSetCosmicTrigger(false);
+  /* Native code occasionally reasserts Shoot while it remains held.
+   * Latching the physical held state guarantees exactly one opening slash. */
+  for(unsigned i=0;i<90;++i) tick(64,64);
+  MmxZeroState s=MmxZeroGetState();
+  assert(!s.slash && !s.combo && !(s.modern.slash_buffer&7));
+  /* Three rapid individual taps must be retained even during startup. */
+  MmxZeroResetState();player();
+  saber_tap();saber_tap();saber_tap();
+  s=MmxZeroGetState();
+  assert(s.slash && s.combo==0 && (s.modern.slash_buffer&7)==2);
+  unsigned first=0,second=0,third=0,slow=0;
+  for(unsigned i=0;i<120;++i) {
+    MmxZeroState a=MmxZeroGetState();
+    tick(0,0);MmxZeroState b=MmxZeroGetState();
+    if(a.combo==0 && b.combo==1 && b.slash==1) ++first;
+    if(a.combo==1 && b.combo==2 && b.slash==1) ++second;
+    if(b.combo==2 && b.slash>=29 && b.slash<=44) {
+      ++third;
+      if(a.combo==2 && a.slash>=29 && b.slash==a.slash+1) ++slow;
+    }
+  }
+  assert(first==1 && second==1 && third>12 && slow>=10);
+  assert(!MmxZeroGetState().slash); /* slow return to sheathed idle */
+  /* Four very quick taps chain back into Slash 1, no fifth auto-swing. */
+  MmxZeroResetState();player();
+  saber_tap();saber_tap();saber_tap();saber_tap();
+  s=MmxZeroGetState();assert(s.combo==0 && (s.modern.slash_buffer&7)==3);
+  unsigned transitions=0;unsigned seen[3]={0};
+  for(unsigned i=0;i<160;++i) {
+    MmxZeroState a=MmxZeroGetState();tick(0,0);
+    MmxZeroState b=MmxZeroGetState();
+    if(a.slash && b.slash==1 && a.slash!=1) {
+      ++transitions;++seen[b.combo];
+    }
+  }
+  assert(transitions==3 && seen[0]==1 && seen[1]==1 && seen[2]==1);
+  assert(!MmxZeroGetState().slash && !MmxZeroGetState().combo);
+  MmxZeroSetModern(false);MmxZeroResetState();player();
+  /* Down+Attack no longer impersonates the R2 cosmic combo. */
+  MmxZeroSetCosmicTrigger(false);tick(68,64);
+  assert(!MmxZeroGetState().slash);
+  MmxZeroSetCosmicTrigger(false);MmxZeroResetState();player();
+}
 static unsigned storm_count;
 static void storm(uint8_t *r) { assert(r==ram); ++storm_count; }
 static void storm_combo_checks(void) {
   MmxZeroSetStormEmitter(storm);
   for(unsigned modern=0;modern<2;++modern) {
     MmxZeroSetModern(modern!=0); MmxZeroResetState(); player();storm_count=0;
-    tick(modern?64:68,64);
+    MmxZeroSetCosmicTrigger(true);
+    tick(64,64);
     for(unsigned swing=0;swing<3;++swing) {
       MmxZeroState s=MmxZeroGetState();
       assert(s.slash==1 && s.combo==swing && MmxZeroStormSlash(&s));
@@ -127,9 +175,10 @@ static void storm_combo_checks(void) {
     }
     for(unsigned i=0;i<60;++i) tick(64,0);
     assert(!MmxZeroGetState().slash && storm_count==1);
-    player();tick(modern?64:68,64);ram[0xbaa]=0x0e;tick(0,0);
+    player();MmxZeroSetCosmicTrigger(true);tick(64,64);ram[0xbaa]=0x0e;tick(0,0);
     assert(!MmxZeroGetState().slash); /* Hurt interrupts safely. */
   }
+  MmxZeroSetCosmicTrigger(false);
   MmxZeroSetStormEmitter(NULL);MmxZeroSetModern(false);MmxZeroResetState();player();
 }
 int main(void) {
@@ -319,6 +368,7 @@ int main(void) {
   assert(MmxZeroActive()); /* A saved character wins over the start choice. */
   MmxZeroSetStartCharacter(false); MmxZeroResetState(); assert(MmxZeroActive());
   modern_checks();
+  saber_press_flow_checks();
   storm_combo_checks();
   MmxZeroDisable(); MmxZeroSetCollisionRom(rom,sizeof(rom));
   assert(!memcmp(rom,clean,sizeof(rom)));

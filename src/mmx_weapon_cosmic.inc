@@ -25,8 +25,8 @@ static void cosmic_player(uint8_t *r) {
       r[0xbdb] || r[0xd1]!=2 || r[0xd2]!=4 || r[0xd3]!=4 ||
       r[0xba9]!=2 || !(r[0xbcf]&127) || r[0x1f0c] || r[0x1f23] ||
       r[0x1f48] || !(r[0xbd3]&4) || r[0xbaa]>10) return;
-  /* Down + a fresh Shoot press. Normal buster and charge inputs stay native. */
-  if((r[0xbdf]&4) && (r[0xbe3]&64) && cosmic_spawn(r,MMX_EARTH_WAVE)) {
+  /* Hold physical R2 + new Shoot press, not Down. Normal fire remains native. */
+  if(MmxZeroCosmicTriggerHeld() && (r[0xbe3]&64) && cosmic_spawn(r,MMX_EARTH_WAVE)) {
     stop_charge(r);r[0xbdf]&=(uint8_t)~64;r[0xbe3]&=(uint8_t)~64;
     r[0xbf8]=12;
   }

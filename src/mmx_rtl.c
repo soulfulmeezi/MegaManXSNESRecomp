@@ -119,6 +119,37 @@ static bool mmx_local_l2_swap_held(void) {
 }
 
 
+/* R2 is independent of the SNES pad and L2 character swap. Poll it
+ * before the game scheduler, using the same analog hysteresis as L2. */
+static bool mmx_local_r2_cosmic_held(void) {
+  static bool held;
+  int axis=0;
+#if SNESRECOMP_SDL3
+  int count=0;
+  SDL_JoystickID *ids=SDL_GetGamepads(&count);
+  for (int i=0; ids && i<count; ++i) {
+    SDL_Gamepad *pad=SDL_GetGamepadFromID(ids[i]);
+    if (pad) {
+      axis=(int)SDL_GetGamepadAxis(pad,SDL_GAMEPAD_AXIS_RIGHT_TRIGGER);
+      break;
+    }
+  }
+  SDL_free(ids);
+#else
+  for (int i=0;i<SDL_NumJoysticks();++i) {
+    SDL_JoystickID id=SDL_JoystickGetDeviceInstanceID(i);
+    SDL_GameController *pad=SDL_GameControllerFromInstanceID(id);
+    if (pad) {
+      axis=(int)SDL_GameControllerGetAxis(pad,SDL_CONTROLLER_AXIS_TRIGGERRIGHT);
+      break;
+    }
+  }
+#endif
+  if (axis>=16000) held=true;
+  else if (axis<=12000) held=false;
+  return held;
+}
+
 /* Dispatch a cooperative task by its 16-bit entry PC (from RAM $0032+slot).
  * The optional HLE scheduler uses the same authoritative runtime dispatch as
  * LLE for both ROM variants. An exact AOT body is an optimization; an absent
@@ -1018,6 +1049,7 @@ void RunOneFrameOfGame(void) {
   }
   cpu_trace_px_breadcrumb(&g_cpu, 0x2002, "before_Internal");
   MmxKncBugfixTick(g_ram,RtlGetPadState(0),RtlGetPadState(1));
+  MmxZeroSetCosmicTrigger(mmx_local_r2_cosmic_held());
   if (MmxCoopEnabled()) {
     MmxCoopSetSwitchTrigger(mmx_local_l2_swap_held());
     MmxCoopPoll(RtlGetPadState(0), RtlGetPadState(1));

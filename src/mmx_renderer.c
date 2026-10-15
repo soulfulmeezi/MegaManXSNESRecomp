@@ -10,6 +10,9 @@
 #include "mmx_x_earth_sections.h"
 #include "mmx_cosmic.h"
 #include "mmx_hover_traffic.h"
+#include "mmx_near_road_cars.h"
+#include "mmx_traffic_telemetry.h"
+#include "mmx_lane_capture.h"
 #include <math.h>
 
 /* Mode-1 decode/composition follows SuperMetroidRecomp's sm_renderer.c.
@@ -623,7 +626,8 @@ static int weapon_menu_icon(int x, int y) {
   unsigned pixel = pose->pixels[py * pose->width + px];
   return pixel ? colors[pixel] : -1;
 }
-static uint16_t background(const Ppu *p, const Raster *r, unsigned layer, int x, int y, bool stage, int *private_color) {
+static uint16_t background_with_tile(const Ppu *p, const Raster *r, unsigned layer, int x, int y, bool stage, int *private_color, uint16_t *tile_entry) {
+  if(tile_entry)*tile_entry=0xffff;
   static const unsigned low[] = {8, 7, 1}, high[] = {12, 11, 3};
   bool margin = x < 0 || x >= 256;
   /* Launch's BG3 water plane is blended over the world on the subscreen.
@@ -764,6 +768,7 @@ static uint16_t background(const Ppu *p, const Raster *r, unsigned layer, int x,
         asset_x = -1;
     }
   }
+  if(tile_entry)*tile_entry=tile;
   int cx = px & (size - 1), cy = py & (size - 1);
   if (tile & 0x4000) cx = size - 1 - cx;
   if (tile & 0x8000) cy = size - 1 - cy;
@@ -787,6 +792,11 @@ static uint16_t background(const Ppu *p, const Raster *r, unsigned layer, int x,
   unsigned priority = tile & 0x2000 ? (layer == 2 && (p->bgmode & 8) ? 15 : high[layer]) : low[layer];
   return (uint16_t)((priority << 12) | (layer << 8) | index);
 }
+static uint16_t background(const Ppu *p,const Raster *r,unsigned layer,
+    int x,int y,bool stage,int *private_color) {
+  return background_with_tile(p,r,layer,x,y,stage,private_color,NULL);
+}
+
 static void sprite(const Ppu *p, const Raster *r, int x, int sy, unsigned attr, int size,
                     int y, MmxRenderView view, uint16_t *out, bool margins_only,
                     const MmxSpriteAsset *asset, unsigned raw_tile, int *object_color,
@@ -976,15 +986,41 @@ static void moved_enemy_row(const MmxWeaponShot *s,const Ppu *p,const Raster *r,
 }
 typedef struct CosmicLight { int x,y; unsigned power,kind; } CosmicLight;
 typedef MmxHoverCar LowerCar;
-static unsigned lower_traffic(LowerCar cars[32],MmxRenderView view,unsigned tick) {
+/* Original city cloud and window ambience without the legacy road-car pixels.
+ * This retains the background when the old color-check traffic is disabled. */
+static int mmx_city_ambience_without_traffic(int x,int y,unsigned tick,uint16_t base) {
+  unsigned r=base&31,g=(base>>5)&31,b=(base>>10)&31;
+  int sky=r>=8 && r<=14 && g>=5 && g<=10 && b>=7 && b<=14 && r>g;
+  if(sky && y>=16 && y<100) {
+    int u=(x+(int)(tick/8))&255;
+    int band=(y-16)/28,row=(y-16)%28,drift=(u+band*83)&127;
+    int curve=3+(drift<48?drift:96-drift)/12;
+    if(drift<96 && row>=curve && row<=curve+2 && ((drift+row)&3)!=0)
+      return MmxCosmicRgb(r+3,g+3,b+3);
+  }
+  if(!sky && y>=70 && y<164 && r<12 && g<14 && b<16 &&
+      (x&31)>=9 && (x&31)<=11 && (y&15)==6 &&
+      (((unsigned)x/32+(unsigned)y/16+tick/90)&3)==0)
+    return MmxCosmicRgb(16,19,14);
+  return -1;
+}
+static int mmx_traffic_env_enabled(const char *name,int otherwise) {
+  const char *v=getenv(name);
+  return v?(*v=='1' || *v=='y' || *v=='Y'):otherwise;
+}
+static unsigned lower_traffic(LowerCar cars[MMX_HOVER_MAX_VISIBLE],MmxRenderView view,unsigned tick) {
   unsigned count=0;
   int camera_x=view_camera(frame.ram,0x1e4d),camera_y=view_camera(frame.ram,0x1e50);
   for(unsigned lane=0;lane<MMX_HOVER_LANES;++lane) {
+    MmxHoverLane path=MmxHoverLaneAt(lane);
+    int min_x=path.fx<path.nx?path.fx:path.nx;
+    int max_x=path.fx>path.nx?path.fx:path.nx;
+    if(max_x<camera_x-view.extra-18 || min_x>camera_x+view.width-view.extra+18) continue;
     for(unsigned slot=0;slot<MMX_HOVER_PER_LANE;++slot) {
       LowerCar car=MmxHoverPosition(lane,slot,tick);
       car.x-=camera_x;car.y-=camera_y;
-      if(car.x<-view.extra-16 || car.x>=view.width-view.extra+16 || car.y<0 || car.y>=240) continue;
-      cars[count++]=car;
+      if(car.x<-view.extra-18 || car.x>=view.width-view.extra+18 || car.y<-18 || car.y>=242) continue;
+      if(count<MMX_HOVER_MAX_VISIBLE) cars[count++]=car;
     }
   }
   return count;
@@ -1470,9 +1506,55 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
   }
   int16_t crystal_ripple[224];MmxWeaponsTimeRipple(&frame_weapon_combat,crystal_ripple);
   CosmicLight lights[18];unsigned light_count=0;
-  LowerCar cars[32];unsigned car_count=stage && MmxZeroEnabled() &&
-      frame.ram[0x1f7a]==0 && frame.ram[0xd3]==4?
+  /* Legacy traffic is explicitly opt-in. The debug-only build adds no cars. */
+  const int legacy_traffic=mmx_traffic_env_enabled("MMX_TRAFFIC_LEGACY",0);
+  const int debug_lanes=mmx_traffic_env_enabled("MMX_TRAFFIC_DEBUG_LANES",1);
+  const int near_cars=mmx_traffic_env_enabled("MMX_NEAR_ROAD_CARS",0);
+  const int near_halo=mmx_traffic_env_enabled("MMX_NEAR_ROAD_HALO",0);
+  const int debug_telemetry=mmx_traffic_env_enabled("MMX_TRAFFIC_DEBUG_STATS",0);
+  const int highway_scene=stage && frame.ram[0x1f7a]==0 && frame.ram[0xd3]==4;
+  /* v33b: gate the lane ink by native Intro Highway camera X and phase.
+   * It is deliberately more conservative than the old stage-wide overlay. */
+  const int traffic_debug_scene=highway_scene && MmxNearRoadScene(
+      frame.ram[0x1f7a],frame.ram[0xd3],word(frame.ram,0x1e4d),frame.ram[0x1e89]);
+  /* v33e: capture once near each requested camera, only when explicitly enabled. */
+  const char *capture_dir=getenv("MMX_LANE_CAPTURE_DIR");
+  const unsigned capture_camera=word(frame.ram,0x1e4d);
+  const int capture_target=(capture_dir && *capture_dir && traffic_debug_scene)?
+      MmxLaneCaptureTarget(capture_camera):-1;
+  uint32_t *capture_pixels=capture_target>=0?
+      (uint32_t*)calloc((size_t)view.width*224*5,sizeof(uint32_t)):NULL;
+  /* v33f: exact sampled BG1 tile metadata for road/pillar classification. */
+  FILE *capture_tiles=NULL;
+  if(capture_pixels) {
+    char capture_path[2048];
+    int n=snprintf(capture_path,sizeof(capture_path),"%s/cam-%04X-bg1-tiles.csv",
+        capture_dir,capture_camera);
+    if(n>0 && (size_t)n<sizeof(capture_path))capture_tiles=fopen(capture_path,"wb");
+    if(capture_tiles)fprintf(capture_tiles,
+      "screen_x,screen_y,world_x,world_y,tile_entry,bg_pixel,hscroll,vscroll,bgmode,big_tiles,mosaic\n");
+    n=snprintf(capture_path,sizeof(capture_path),"%s/cam-%04X-frame.mmxc",
+        capture_dir,capture_camera);
+    int saved=n>0 && (size_t)n<sizeof(capture_path) && MmxRendererSaveCapture(capture_path);
+    fprintf(stderr,"v33f native frame camera %04X: %s; tile CSV: %s\n",
+        capture_camera,saved?"SAVED":"FAILED",capture_tiles?"OPEN":"FAILED");
+  }
+  LowerCar cars[MMX_HOVER_MAX_VISIBLE];unsigned car_count=legacy_traffic &&
+      highway_scene && MmxZeroEnabled() ?
       lower_traffic(cars,view,frame_weapon_combat.tick):0;
+  /* World-space car anchors are calculated once per output frame, not once
+   * per pixel. Keep this first test completely behind an opt-in variable. */
+  MmxNearCar road_cars[MMX_NEAR_CAR_MAX];unsigned road_car_count=0;
+  if(near_cars && traffic_debug_scene) {
+    int camera_x=view_camera(frame.ram,0x1e4d);
+    for(unsigned lane=0;lane<MMX_NEAR_CAR_LANES;++lane)
+      for(unsigned slot=0;slot<MMX_NEAR_CAR_SLOTS;++slot) {
+        MmxNearCar car=MmxNearCarAt(lane,slot,frame_weapon_combat.tick);
+        if(car.x>=camera_x-view.extra-MMX_NEAR_CAR_W_MAX &&
+           car.x<camera_x+view.width-view.extra+MMX_NEAR_CAR_W_MAX)
+          road_cars[road_car_count++]=car;
+      }
+  }
   if(stage && !swapping && !palette_fade && frame.ram[0xd3]==4 &&
       !frame.ram[0x1f0c] && !frame.ram[0x1f23] && MmxZeroEnabled()) {
     light_count=cosmic_lights(lights,0,frame.ram,&frame_zero,&frame_weapon_combat,view);
@@ -1738,19 +1820,57 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
       int x = sx - view.extra;
       if (menu && (x < 0 || x >= 256)) { out[y * view.width + sx] = 0; continue; }
       uint16_t screens[2] = {0x500, 0x500}, bg[3] = {0};
+      uint16_t near_road_tile=0xffff;
       int bg_colors[3] = {-1, -1, -1};
       for (int layer = 0; layer < 3; ++layer) if ((p.screenEnabled[0] | p.screenEnabled[1]) & (1 << layer)) {
         int bx = x, by = y + 1;
         if (stage && layer==0) by+=crystal_ripple[y];
         if (p.mosaic & (1 << layer)) { int size = (p.mosaic >> 4) + 1;
           bx -= ((bx % size) + size) % size; by -= by % size; }
-        bg[layer] = background(&p, r, layer, bx, by, stage, &bg_colors[layer]);
+        bg[layer] = background_with_tile(&p, r, layer, bx, by, stage, &bg_colors[layer],
+            layer==0?&near_road_tile:NULL);
+      }
+      if(capture_pixels) {
+        const size_t cp=(size_t)y*view.width+sx, plane=(size_t)view.width*224;
+        for(int layer=0;layer<3;layer++) {
+          /* Decode even disabled layers; no sprites, color math or traffic. */
+          int bx=x,by=y+1,override_color=-1;
+          if(layer==0)by+=crystal_ripple[y];
+          if(p.mosaic&(1<<layer)){int sz=(p.mosaic>>4)+1;
+            bx-=((bx%sz)+sz)%sz;by-=by%sz;}
+          uint16_t entry;
+          unsigned tile=background_with_tile(&p,r,layer,bx,by,stage,&override_color,&entry);
+          if(layer==0 && capture_tiles && y>=144) {
+            int wx=MmxDisplay_ExpandStageScroll((uint16_t)word(frame.ram,0x1e4d),p.hScroll[0])+view_dx+bx;
+            int wy=MmxDisplay_ExpandStageScroll((uint16_t)word(frame.ram,0x1e50),p.vScroll[0])+view_dy+by;
+            fprintf(capture_tiles,"%d,%d,%d,%d,%u,%u,%u,%u,%u,%u,%u\n",
+              x,y,wx,wy,(unsigned)entry,tile,(unsigned)p.hScroll[0],(unsigned)p.vScroll[0],
+              (unsigned)p.bgmode,(unsigned)PPU_bigTiles((&p),0),(unsigned)p.mosaic);
+          }
+          capture_pixels[layer*plane+cp]=tile?MmxLaneCaptureRgb(
+              override_color>=0?(unsigned)override_color:r->palette[tile&255]):0x202020;
+        }
+        int lx=x+MmxDisplay_ExpandStageScroll((uint16_t)word(frame.ram,0x1e4d),p.hScroll[0])+view_dx;
+        int ly=y+1+crystal_ripple[y]+MmxDisplay_ExpandStageScroll(
+            (uint16_t)word(frame.ram,0x1e50),p.vScroll[0])+view_dy;
+        int candidate=-1;
+        for(int lane=3;lane>=0;lane--)if(ly==MmxNearRoadY((unsigned)lane,lx)) {
+          candidate=mmx_near_road_colors[lane];break;
+        }
+        int ink=MmxNearRoadPixel(lx,ly,near_road_tile,bg[0]);
+        capture_pixels[3*plane+cp]=candidate>=0?MmxLaneCaptureRgb((unsigned)candidate):capture_pixels[cp];
+        capture_pixels[4*plane+cp]=candidate<0?0x202020:
+            ink>=0?0xffffff:!bg[0]?0x3090ff:0xff3030;
+
       }
       if(stage && frame.ram[0x1f7a]==0 && frame.ram[0xd3]==4 &&
           MmxZeroEnabled() && bg[1]) {
         uint16_t base=bg_colors[1]>=0?(uint16_t)bg_colors[1]:r->palette[bg[1]&255];
-        int activity=MmxCityActivityPixel(x+view_camera(frame.ram,0x1e4d)/8,y,
-            frame_weapon_combat.tick,base);
+        int activity=legacy_traffic?
+            MmxCityActivityPixel(x+view_camera(frame.ram,0x1e4d)/8,y,
+                frame_weapon_combat.tick,base):
+            mmx_city_ambience_without_traffic(x+view_camera(frame.ram,0x1e4d)/8,y,
+                frame_weapon_combat.tick,base);
         if(activity>=0) bg_colors[1]=activity;
       }
       for(unsigned i=0;i<car_count;++i) {
@@ -1761,6 +1881,34 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
         int native_color=-1;unsigned tile=background(&p,r,layer,x,y+1,true,&native_color);
         uint16_t base=native_color>=0?(uint16_t)native_color:r->palette[tile&255];
         if(tile && MmxLowerRoadColor(base)) bg_colors[layer]=pixel;
+      }
+      /* v33g: replace only verified grey-road pixels on BG1.
+       * Native BG1 priority, windows, sprites and color math remain intact. */
+      if(debug_lanes && traffic_debug_scene && bg[0] && !PPU_bigTiles((&p),0) && !(p.mosaic&1)) {
+        int road_x=x+MmxDisplay_ExpandStageScroll((uint16_t)word(frame.ram,0x1e4d),p.hScroll[0])+view_dx;
+        int road_y=y+1+crystal_ripple[y]+MmxDisplay_ExpandStageScroll(
+            (uint16_t)word(frame.ram,0x1e50),p.vScroll[0])+view_dy;
+        int pixel=MmxNearRoadPixel(road_x,road_y,near_road_tile,bg[0]);
+        if(pixel>=0)bg_colors[0]=pixel;
+      }
+      /* v33i: exact native 8px-high Tier 1 sheet, no old v33h sedans.
+       * Preserve BG1 tile/pillar/building occlusion. No curved C/D sprites. */
+      if(road_car_count && bg[0] && !PPU_bigTiles((&p),0) && !(p.mosaic&1)) {
+        int road_x=x+MmxDisplay_ExpandStageScroll(
+            (uint16_t)word(frame.ram,0x1e4d),p.hScroll[0])+view_dx;
+        int road_y=y+1+crystal_ripple[y]+MmxDisplay_ExpandStageScroll(
+            (uint16_t)word(frame.ram,0x1e50),p.vScroll[0])+view_dy;
+        for(unsigned i=0;i<road_car_count;++i) {
+          int pixel=MmxNearCarRoadPixel(&road_cars[i],road_x,road_y,
+                                       near_road_tile,bg[0]);
+          if(pixel>=0){bg_colors[0]=pixel;break;}
+          /* OFF by default; guard for later 1px halo evaluation. */
+          if(near_halo) {
+            pixel=MmxNearCarHaloPixel(&road_cars[i],road_x,road_y,
+                                      near_road_tile,bg[0]);
+            if(pixel>=0){bg_colors[0]=pixel;break;}
+          }
+        }
       }
       if(light_count) {
         unsigned earth=0,storm=0;
@@ -1799,5 +1947,36 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
                                        dialogue_backdrop && (x < 0 || x >= 256));
     }
   }
+  /* Stage-A-only instrumentation: read the lower-road scanline's captured
+   * native PPU, not player sprite coordinates or the host window position. */
+  if(debug_telemetry && stage) {
+    const Raster *sample=&frame.lines[200];
+    Ppu road_ppu;
+    memcpy(&road_ppu,sample->registers,PPU_SAVESTATE_REGS_SIZE);
+    MmxTrafficTelemetry telemetry={0};
+    telemetry.stage=frame.ram[0x1f7a];
+    telemetry.phase=frame.ram[0xd3];
+    telemetry.mode=frame.ram[0x1e89];
+    telemetry.gate=traffic_debug_scene;
+    telemetry.camera_x=(unsigned)word(frame.ram,0x1e4d);
+    telemetry.camera_y=(unsigned)word(frame.ram,0x1e50);
+    telemetry.bg2_stream_x=(unsigned)word(frame.ram,0x1e8d);
+    telemetry.bg2_stream_y=(unsigned)word(frame.ram,0x1e90);
+    telemetry.ppu_bg2_x=road_ppu.hScroll[1];
+    telemetry.ppu_bg2_y=road_ppu.vScroll[1];
+    telemetry.bg2_world_x=(unsigned)MmxTrafficBg2Scroll(
+        telemetry.bg2_stream_x,telemetry.ppu_bg2_x);
+    telemetry.bg2_world_y=(unsigned)MmxTrafficBg2Scroll(
+        telemetry.bg2_stream_y,telemetry.ppu_bg2_y);
+    MmxTrafficTelemetryDraw(out,(unsigned)view.width,&telemetry);
+  }
+  if(capture_tiles) {
+    int tile_error=ferror(capture_tiles);
+    if(fclose(capture_tiles))tile_error=1;
+    fprintf(stderr,"v33f tile CSV camera %04X: %s\n",capture_camera,
+        tile_error?"FAILED":"SAVED");
+  }
+  if(capture_pixels)MmxLaneCaptureSave(capture_dir,capture_pixels,out,
+      (unsigned)view.width,capture_camera,capture_target);
   return true;
 }
