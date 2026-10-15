@@ -35,6 +35,20 @@ label = "Zero"
 
 [[option]]
 feature = "coop"
+id = "companion"
+label = "Player 2 control"
+description = "Human keeps normal two-player co-op. CPU (experimental) follows, jumps, wall-kicks, attacks, and attempts safe pit rescue. In offline CPU mode press L2 on Player 1's controller to switch between X and Zero; the other character becomes the CPU."
+type = "choice"
+default = "human"
+[[option.choice]]
+value = "human"
+label = "Human (Player 2 controller)"
+[[option.choice]]
+value = "cpu"
+label = "CPU Companion (Experimental)"
+
+[[option]]
+feature = "coop"
 id = "behavior"
 label = "Zero behavior"
 description = "Shared with Add Zero. Modern replaces Zero's buster with a direct saber and adds a double jump and air dash. Special weapons remain available."

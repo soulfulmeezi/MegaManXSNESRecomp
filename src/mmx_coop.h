@@ -64,9 +64,49 @@ static inline void MmxCoopImportLegacy(MmxCoopState *out, const uint8_t *bytes) 
       MMX_COOP_LEGACY_STATE_SIZE - old_player * 2);
 }
 
+/* Pure controller decision for one local companion terrain scan.
+ * Sensor inputs belong to the CPU's OWN position, never the human jump pad.
+ * WAIT forbids walking into unverified void; CLIMB requests takeoff against
+ * a confirmed wall and then native wall-slide/wall-kick input takes over.
+ * Inline makes the decision independently testable without owning a ROM. */
+typedef enum {
+  MMX_CPU_MOVE_WALK, MMX_CPU_MOVE_WAIT,
+  MMX_CPU_MOVE_JUMP, MMX_CPU_MOVE_CLIMB, MMX_CPU_MOVE_DROP
+} MmxCpuMoveDecision;
+static inline MmxCpuMoveDecision MmxCoopCpuChooseMove(
+    bool ground_missing, bool safe_landing, bool climb_route,
+    bool wall_near, bool safe_drop, bool obstacle_or_stall) {
+  if (ground_missing)
+    return safe_drop ? MMX_CPU_MOVE_DROP :
+           climb_route ? MMX_CPU_MOVE_CLIMB :
+           safe_landing ? MMX_CPU_MOVE_JUMP : MMX_CPU_MOVE_WAIT;
+  if (climb_route && wall_near) return MMX_CPU_MOVE_CLIMB;
+  if (obstacle_or_stall) return MMX_CPU_MOVE_JUMP;
+  return MMX_CPU_MOVE_WALK;
+}
+
+/* X can stand nearly directly above the CPU, so horizontal follow has
+ * no direction. Choose a nearby, physically sensed wall to climb rather
+ * than idling. Prefer the wall toward X when a horizontal preference
+ * exists; when directly underneath, use the nearest visible wall face.
+ * Do not invent a direction if no solid wall was detected. */
+static inline int MmxCoopCpuChooseClimbDirection(int target_dx,
+                                                  int wall_right,
+                                                  int wall_left) {
+  if (target_dx>=12) return wall_right ? 1 : 0;
+  if (target_dx<=-12) return wall_left ? -1 : 0;
+  if (!wall_right) return wall_left ? -1 : 0;
+  if (!wall_left) return 1;
+  return wall_right<=wall_left ? 1 : -1;
+}
+
 /* The trusted co-op plugin prepares the owner-supplied X3 ROM, then enables
  * the chosen roster. This mode excludes single-player character exchange. */
 bool MmxCoopEnable(unsigned p1_character);
+/* Host-only option: synthesize P2 gamepad input during local co-op. */
+void MmxCoopSetCpuCompanion(bool active);
+/* Desktop host: physical L2 analog state, independent of the 12 SNES buttons. */
+void MmxCoopSetSwitchTrigger(bool held);
 void MmxCoopDisable(void);
 bool MmxCoopEnabled(void);
 void MmxCoopReset(void);
