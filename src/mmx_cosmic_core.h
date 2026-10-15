@@ -5,7 +5,7 @@
 /* Standalone, ROM-free Cosmic Constellation prototype. This is not connected
  * to the game or any serialized save ABI. Do not embed it in MmxCoopState. */
 enum {
-  MMX_COSMIC_ASPECT_COUNT = 12,
+  MMX_COSMIC_ASPECT_COUNT = 13,
   MMX_COSMIC_NONE = 255,
   MMX_COSMIC_RESONANCE_MAX = 100,
   MMX_COSMIC_FUSION_COST = 100,
@@ -15,7 +15,8 @@ typedef enum MmxCosmicAspect {
   MMX_COSMIC_STORM = 0, MMX_COSMIC_GRAVITY, MMX_COSMIC_SOLAR,
   MMX_COSMIC_PRISM, MMX_COSMIC_FROST, MMX_COSMIC_ORBIT,
   MMX_COSMIC_ECHO, MMX_COSMIC_RIFT, MMX_COSMIC_EMBER,
-  MMX_COSMIC_MAGNET, MMX_COSMIC_TIDE, MMX_COSMIC_VOID
+  MMX_COSMIC_MAGNET, MMX_COSMIC_TIDE, MMX_COSMIC_VOID,
+  MMX_COSMIC_EARTH = 12 /* Existing Earth Wave progression ID; not a native weapon ID. */
 } MmxCosmicAspect;
 typedef enum MmxCosmicSpecialization {
   MMX_COSMIC_BASE = 0, MMX_COSMIC_FORCE,

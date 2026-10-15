@@ -17,7 +17,7 @@ static void unlock_and_equip_are_checked(void) {
   MmxCosmicState s;
   MmxCosmicReset(&s);
   assert(!MmxCosmicEquip(&s, 0, MMX_COSMIC_STORM));
-  assert(!MmxCosmicUnlock(&s, 12));
+  assert(!MmxCosmicUnlock(&s, MMX_COSMIC_ASPECT_COUNT));
   assert(MmxCosmicUnlock(&s, MMX_COSMIC_STORM));
   assert(!MmxCosmicUnlock(&s, MMX_COSMIC_STORM));
   assert(MmxCosmicUnlock(&s, MMX_COSMIC_GRAVITY));

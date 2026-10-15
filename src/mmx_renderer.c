@@ -9,6 +9,7 @@
 #include "mmx_coop_view.h"
 #include "mmx_x_earth_sections.h"
 #include "mmx_cosmic.h"
+#include "mmx_cosmic_upgrade_vfx.h"
 #include "mmx_hover_traffic.h"
 #include "mmx_near_road_cars.h"
 #include "mmx_traffic_telemetry.h"
@@ -1047,7 +1048,7 @@ static unsigned cosmic_lights(CosmicLight *lights,unsigned count,const uint8_t *
   return count;
 }
 static void weapon_effects_row(const MmxWeaponCombatState *combat,const Ppu *p,const Raster *r,
-                               int y,MmxRenderView view,uint16_t *objects,int *object_colors) {
+                               int y,MmxRenderView view,uint16_t *objects,int *object_colors,int upgrade_vfx) {
   for (unsigned i=0;i<24;++i) {
     const MmxWeaponShot *s=i<8 ? combat->shots+i : combat->effects+i-8;
     if (!s->active || !s->age) continue;
@@ -1057,6 +1058,7 @@ static void weapon_effects_row(const MmxWeaponCombatState *combat,const Ppu *p,c
       int cx=(s->x>>8)-view_camera(frame.ram,0x1e4d);
       for(int col=-24;col<=24;++col) {
         int color=MmxCosmicShotPixel(s->weapon,s->age,s->facing?col:-col,row);
+        if(color<0 && upgrade_vfx) color=MmxCosmicUpgradeSparkPixel(s->weapon,s->age,s->facing?col:-col,row);
         int dx=cx+col+view.extra;
         if(color>=0 && dx>=0 && dx<view.width) {objects[dx]=0xe681;object_colors[dx]=color;}
       }
@@ -1510,6 +1512,7 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
   const int legacy_traffic=mmx_traffic_env_enabled("MMX_TRAFFIC_LEGACY",0);
   const int debug_lanes=mmx_traffic_env_enabled("MMX_TRAFFIC_DEBUG_LANES",1);
   const int near_cars=mmx_traffic_env_enabled("MMX_NEAR_ROAD_CARS",0);
+  const int upgrade_vfx=mmx_traffic_env_enabled("MMX_COSMIC_UPGRADE_VFX",0);
   const int near_halo=mmx_traffic_env_enabled("MMX_NEAR_ROAD_HALO",0);
   const int debug_telemetry=mmx_traffic_env_enabled("MMX_TRAFFIC_DEBUG_STATS",0);
   const int highway_scene=stage && frame.ram[0x1f7a]==0 && frame.ram[0xd3]==4;
@@ -1810,9 +1813,9 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
       }
     }
     if (stage && !swapping) {
-      weapon_effects_row(&frame_weapon_combat,&p,r,y,view,objects,object_colors);
+      weapon_effects_row(&frame_weapon_combat,&p,r,y,view,objects,object_colors,upgrade_vfx);
       if (frame_coop.initialized && frame_coop.players[frame_coop.current^1].status==MMX_COOP_ALIVE && !frame_coop.scene_owner)
-        weapon_effects_row(&frame_coop.players[frame_coop.current^1].combat,&p,r,y,view,objects,object_colors);
+        weapon_effects_row(&frame_coop.players[frame_coop.current^1].combat,&p,r,y,view,objects,object_colors,upgrade_vfx);
     }
     if (swapping) teleport_actor_row(frame.ram,&frame_zero,&p,r,y,view,objects,object_colors);
     if(coop_hud) coop_hud_row(&p,r,y,view,hud,objects,object_colors);
