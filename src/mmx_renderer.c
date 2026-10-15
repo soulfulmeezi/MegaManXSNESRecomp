@@ -1888,8 +1888,11 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
        * color math still have their original precedence. */
       if(cloud_fx && !bg[0] && bg[1]) {
         uint16_t source=bg_colors[1]>=0?(uint16_t)bg_colors[1]:r->palette[bg[1]&255];
-        int sky=MmxFxAtmospherePixel(source,x,y,
-            view_camera(frame.ram,0x1e4d),frame_weapon_combat.tick);
+        int sky=frame.ram[0x1f7a]==0 ?
+            MmxFxHighwayCloudPixel(source,x,y,
+                view_camera(frame.ram,0x1e4d),frame_weapon_combat.tick) :
+            MmxFxAtmospherePixel(source,x,y,
+                view_camera(frame.ram,0x1e4d),frame_weapon_combat.tick);
         if(sky>=0)bg_colors[1]=sky;
       }
       for(unsigned i=0;i<car_count;++i) {
