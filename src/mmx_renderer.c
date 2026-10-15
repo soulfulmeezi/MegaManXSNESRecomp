@@ -10,6 +10,7 @@
 #include "mmx_x_earth_sections.h"
 #include "mmx_cosmic.h"
 #include "mmx_environment_fx.h"
+#include "mmx_weapon_fx.h"
 #include "mmx_hover_traffic.h"
 #include "mmx_near_road_cars.h"
 #include "mmx_traffic_telemetry.h"
@@ -1048,16 +1049,19 @@ static unsigned cosmic_lights(CosmicLight *lights,unsigned count,const uint8_t *
   return count;
 }
 static void weapon_effects_row(const MmxWeaponCombatState *combat,const Ppu *p,const Raster *r,
-                               int y,MmxRenderView view,uint16_t *objects,int *object_colors) {
+                               int y,MmxRenderView view,bool enhanced,
+                               uint16_t *objects,int *object_colors) {
   for (unsigned i=0;i<24;++i) {
     const MmxWeaponShot *s=i<8 ? combat->shots+i : combat->effects+i-8;
     if (!s->active || !s->age) continue;
     if(s->page==MMX_COSMIC_PAGE) {
       int cy=(s->y>>8)-view_camera(frame.ram,0x1e50);
-      int row=y-cy;if(row < -28 || row>19) continue;
+      int row=y-cy;if(row < -36 || row>30) continue;
       int cx=(s->x>>8)-view_camera(frame.ram,0x1e4d);
-      for(int col=-24;col<=24;++col) {
-        int color=MmxCosmicShotPixel(s->weapon,s->age,s->facing?col:-col,row);
+      for(int col=-40;col<=40;++col) {
+        int px=s->facing?col:-col;
+        int color=MmxCosmicShotPixel(s->weapon,s->age,px,row);
+        if(color<0 && enhanced) color=MmxFxWeaponDetailPixel(s->weapon,s->age,px,row);
         int dx=cx+col+view.extra;
         if(color>=0 && dx>=0 && dx<view.width) {objects[dx]=0xe681;object_colors[dx]=color;}
       }
@@ -1512,6 +1516,7 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
    * Opt out via MMX_CLOUD_FX=0; leave original v33 gameplay untouched. */
   const int cloud_fx=stage && !palette_fade && !swapping &&
       frame.ram[0xd3]==4 && mmx_traffic_env_enabled("MMX_CLOUD_FX",1);
+  const int weapon_fx=stage && mmx_traffic_env_enabled("MMX_WEAPON_FX",1);
   const int legacy_traffic=mmx_traffic_env_enabled("MMX_TRAFFIC_LEGACY",0);
   const int debug_lanes=mmx_traffic_env_enabled("MMX_TRAFFIC_DEBUG_LANES",1);
   const int near_cars=mmx_traffic_env_enabled("MMX_NEAR_ROAD_CARS",0);
@@ -1815,9 +1820,9 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
       }
     }
     if (stage && !swapping) {
-      weapon_effects_row(&frame_weapon_combat,&p,r,y,view,objects,object_colors);
+      weapon_effects_row(&frame_weapon_combat,&p,r,y,view,weapon_fx,objects,object_colors);
       if (frame_coop.initialized && frame_coop.players[frame_coop.current^1].status==MMX_COOP_ALIVE && !frame_coop.scene_owner)
-        weapon_effects_row(&frame_coop.players[frame_coop.current^1].combat,&p,r,y,view,objects,object_colors);
+        weapon_effects_row(&frame_coop.players[frame_coop.current^1].combat,&p,r,y,view,weapon_fx,objects,object_colors);
     }
     if (swapping) teleport_actor_row(frame.ram,&frame_zero,&p,r,y,view,objects,object_colors);
     if(coop_hud) coop_hud_row(&p,r,y,view,hud,objects,object_colors);
