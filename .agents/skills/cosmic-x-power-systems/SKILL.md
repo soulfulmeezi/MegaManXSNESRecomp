@@ -22,3 +22,7 @@ Specify: stable ID, character/weapon mode, slot/unlock and weapon energy rules; 
 
 ## Safety
 Changes to gameplay code, running builds, installing external tools or accessing copyrighted ROM assets need explicit approval beyond this document. Do not describe a synthetic test as successful real gameplay.
+
+
+## Progression and power fusion
+The owner selected BOTH numerous collectibles and permanent evolving powers. Use [Cosmic Constellation proposal](../../../docs/cosmic-x-constellation-system.md) and [cosmic-x-constellation-progression](../cosmic-x-constellation-progression/SKILL.md) for unlock design, two-active-power loadouts, curated Conjunctions, Resonance, X/Zero expressions, tests and save-state compatibility. These are proposed mechanics until individually implemented, approved and playtested.

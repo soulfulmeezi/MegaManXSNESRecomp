@@ -1,6 +1,6 @@
 # Cosmic X specialized agent skill library
 
-This branch contains five original, non-executable game-development skills. They are instructions for compatible coding agents, not installed programs, art assets, a new renderer or proof of improved gameplay. Root AGENTS.md provides routing when supported; any agent can be explicitly asked to read the individual SKILL.md.
+This branch contains ten original, non-executable game-development skills. They are instructions for compatible coding agents, not installed programs, art assets, a new renderer or proof of improved gameplay. Root AGENTS.md provides routing when supported; any agent can be explicitly asked to read the individual SKILL.md.
 
 | Order | Skill | Use for | Output |
 | --- | --- | --- | --- |
@@ -31,10 +31,10 @@ Ask a compatible agent to read a path and apply its instructions. For example:
 5. Iterate original stage art, maintaining a nearest-neighbor fallback; separately develop Zero companion fixes on the branch with existing Zero AI.
 
 ## Existing research and external candidates
-The other [Cosmic X research draft PR #3](https://github.com/soulfulmeezi/MegaManXSNESRecomp/pull/3) separately provides a cosmic-x-analysis skill and [researched tooling/license notes](https://github.com/soulfulmeezi/MegaManXSNESRecomp/blob/codex/cosmic-x-research-skills/docs/cosmic-x-tooling-plan.md). Those are not on main yet and are not required for these five skills. Generic upstream systematic-debugging, test-driven-development, SNES debugger and profiler projects are **not copied, installed or run** by this change.
+The other [Cosmic X research draft PR #3](https://github.com/soulfulmeezi/MegaManXSNESRecomp/pull/3) separately provides a cosmic-x-analysis skill and [researched tooling/license notes](https://github.com/soulfulmeezi/MegaManXSNESRecomp/blob/codex/cosmic-x-research-skills/docs/cosmic-x-tooling-plan.md). Those are not on main yet and are not required for these skills. Generic upstream systematic-debugging, test-driven-development, SNES debugger and profiler projects are **not copied, installed or run** by this change.
 
 ## Scope and validation
-This change intentionally consists exclusively of Markdown instruction files. No game code, scripts, assets, ROMs, submodules, pipeline configuration or dependencies are modified. No video was opened, no performance number was measured and no game build was run. All proposed acceptance tests still need explicit implementation and validation.
+This change intentionally consists exclusively of Markdown instruction files. No game code, scripts, assets, ROMs, submodules, pipeline configuration or dependencies are modified. A separately uploaded combat clip was reviewed and its observations recorded; no native performance metrics were measured and no game build was run. All proposed acceptance tests still need explicit implementation and validation.
 
 The game repository is licensed under PolyForm Noncommercial 1.0.0; review commercialization and third-party IP separately. A tool license does not authorize copied proprietary game content. Future additions require exact version and license verification before installing or adapting any third-party skill/tool.
 
@@ -51,3 +51,10 @@ The supplied ~79.6-second 30fps gameplay montage was reviewed using individual f
 | P2 | [Combat VFX](../.agents/skills/cosmic-x-combat-vfx/SKILL.md) | Lightning, fire, energy glow, slash trails, impact flashes | Original VFX with z-order, readability, accessibility and performance budgets |
 
 Suggested combat vertical slice after separate gameplay authorization: prototype one original regular/charged energy power and one synthetic training enemy with a readable, avoidable telegraph; add lightweight impact VFX, then profile the resulting frame pacing. Do not add exact attacks, code, or assets copied from the reference game.
+
+
+## Combined collection + upgrade design: Cosmic Constellation System
+
+The player wants **both** a large library of discoverable powers and a small set that evolve or combine. Read the [original Cosmic Constellation design](cosmic-x-constellation-system.md) and [Constellation progression skill](../.agents/skills/cosmic-x-constellation-progression/SKILL.md).
+
+The proposal includes four permanent Foundation progression tracks, a 12-Aspect target roster, Force/Shape/Flow specializations, two equipped active powers and one support trait, deterministic skill-based Resonance and a **small set of crafted Conjunctions** rather than every possible pairing. The first proposed implementation slice is Storm + Gravity = Jupiter's Thunderwell using synthetic effects and a training enemy, on a later separately approved gameplay branch. Current documentation does not implement any power or save format.
