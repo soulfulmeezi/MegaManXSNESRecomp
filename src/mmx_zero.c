@@ -30,19 +30,26 @@ static uint16_t hud_colors[16];
 static uint8_t animation[MMX_ZERO_ANIMATION_BYTES];
 static uint8_t muzzle[MMX_ZERO_MUZZLE_BYTES];
 static MmxZeroState state;
+/* Cosmic X uses sword-only Zero by default; legacy buster can be enabled
+ * explicitly for regression tests of the original X3 ruleset. */
+static bool saber_only = true;
 static bool cosmic_trigger_held;
 void MmxZeroSetCosmicTrigger(bool held) { cosmic_trigger_held=held; }
 bool MmxZeroCosmicTriggerHeld(void) { return cosmic_trigger_held; }
 static void (*storm_emitter)(uint8_t *);
 void MmxZeroSetStormEmitter(void (*emit)(uint8_t *)) { storm_emitter=emit; }
 bool MmxZeroStormSlash(const MmxZeroState *s) {
-  return s && s->slash && (s->modern.enabled || s->saber_ready);
+  return s && s->slash && (saber_only || s->modern.enabled || s->saber_ready);
 }
 uint16_t MmxZeroStormBladeColor(const MmxZeroState *s,uint16_t original) {
   unsigned r=original&31,g=(original>>5)&31,b=(original>>10)&31;
-  if(!MmxZeroStormSlash(s) || (s->modern.enabled && !(s->modern.reserved&1)) ||
-      g<12 || g<r || g<b) return original;
+  if(!MmxZeroStormSlash(s) || g<12 || g<r || g<b) return original;
+  /* Color each actual move: cyan aerial spin, amber down slash, then
+   * increasingly warm forward/rising/heavy ground cuts. */
   if(r+g+b>64) return MmxCosmicRgb(31,30,26);
+  if(s->air) return (s->modern.reserved&2) ?
+      MmxCosmicRgb(31,20,8) : MmxCosmicRgb(8,28,31);
+  if(s->modern.enabled && !(s->modern.reserved&1) && !saber_only) return original;
   return s->combo==2 ? MmxCosmicRgb(29,15,6) :
       s->combo==1 ? MmxCosmicRgb(26,21,13) : MmxCosmicRgb(18,24,28);
 }
@@ -63,6 +70,8 @@ MmxZeroState MmxZeroGetState(void) { return state; }
  * first exchange. Co-op never selects it and keeps Zero. */
 static bool start_x;
 static bool modern_behavior;
+void MmxZeroSetSaberOnly(bool enabled) { saber_only = enabled; }
+bool MmxZeroSaberOnly(void) { return saber_only; }
 void MmxZeroSetModern(bool enabled) { modern_behavior = enabled; }
 bool MmxZeroModern(void) { return MmxZeroActive() && modern_behavior; }
 void MmxZeroSetStartCharacter(bool x) { start_x = x; }
@@ -76,7 +85,7 @@ bool MmxZeroValidState(const MmxZeroState *value) {
   return s.combo <= 2 && s.slash <= 44 && s.charge <= 201 &&
       s.modern.enabled <= 1 && s.modern.jump_used <= 1 && s.modern.dash_used <= 1 &&
       s.modern.dash_ticks <= 18 && (s.modern.dash_facing == 0 || s.modern.dash_facing == 64) &&
-      s.modern.slash_buffer <= 15 && s.modern.hit_phase <= 1 && s.modern.reserved <= 1 &&
+      s.modern.slash_buffer <= 15 && s.modern.hit_phase <= 1 && s.modern.reserved <= 3 &&
       s.active_x <= 1 && s.swap_phase <= 6 && s.swap_tick <= 30 && s.swap_y <= 0 && s.swap_y >= -320 &&
       s.hp_valid <= 1 && s.hp_max <= 32 && s.hp[0] <= 32 && s.hp[1] <= 32 &&
       (!s.hp_valid || (s.hp_max >= 16 && s.hp[0] <= s.hp_max && s.hp[1] <= s.hp_max)) &&
@@ -386,22 +395,28 @@ unsigned MmxZeroWeaponOrigin(const uint8_t r[0x20000], unsigned object,
   return (original + delta) & 0xffff;
 }
 static unsigned slash_pose(const MmxZeroState *s) {
-  /* Vanilla X3 group $4B actions $00/$0E: duration, frame. */
+  /* Original X3 sword art supplies seven grounded and seven aerial body
+   * frames. Air cuts now have dedicated choreography, not a ground alias. */
   static const uint8_t duration[] = {3,3,1,2,3,3,6,16,3,3,3};
   static const uint8_t pose[] = {0,1,2,2,3,4,5,6,4,1,0};
-  /* Three choreographies assembled from the original grounded/air poses:
-   * forward cut, low-to-high backswing, and a held overhead heavy cut. */
-  static const uint8_t storm_pose[3][11] = {
-    {0,1,2,2,3,4,5,6,4,1,0},
-    {6,6,5,5,4,3,2,1,1,0,0},
-    {0,2,3,3,4,5,6,6,4,1,0}
+  static const uint8_t ground[3][11] = {
+    {0,1,2,2,3,4,5,6,4,1,0}, /* fast horizontal cut */
+    {6,6,5,5,4,3,2,1,1,0,0}, /* low-to-high backswing */
+    {0,2,3,3,4,5,6,6,4,1,0}  /* overhead heavy finisher */
   };
+  static const uint8_t air_spin[] = {1,2,4,6,5,3,0,2,4,1,0};
+  static const uint8_t air_down[] = {0,1,5,6,6,6,4,3,2,1,0};
   unsigned age = s->slash;
   for (unsigned i = 0; i < sizeof(duration); ++i) {
-    if (age < duration[i]) return (MmxZeroStormSlash(s)?storm_pose[s->combo%3][i]:pose[i]) + (s->air ? 7 : 0);
+    if (age < duration[i]) {
+      if (s->air && MmxZeroStormSlash(s))
+        return 7 + ((s->modern.reserved&2) ? air_down[i] : air_spin[i]);
+      return (MmxZeroStormSlash(s)?ground[s->combo%3][i]:pose[i]) +
+          (s->air ? 7 : 0);
+    }
     age -= duration[i];
   }
-  return 0;
+  return s->air ? 7 : 0;
 }
 int MmxZeroPoseOffsetY(const uint8_t ram[0x20000]) {
   /* X3's kneeling art ends ten pixels below its ordinary standing origin.
@@ -446,8 +461,13 @@ const uint8_t *MmxZeroBlade(const MmxZeroState *s) {
   unsigned age = s->slash - 7, pose = 0;
   while (pose < 6 && age >= duration[pose]) age -= duration[pose++];
   if(MmxZeroStormSlash(s)) {
-    static const uint8_t arc[3][7]={{0,1,2,3,4,5,6},{6,5,4,3,2,1,0},{0,2,2,3,3,4,6}};
-    pose=arc[s->combo%3][pose];
+    static const uint8_t arc[3][7] = {
+      {0,1,2,3,4,5,6}, {6,5,4,3,2,1,0}, {0,2,2,3,3,4,6}
+    };
+    static const uint8_t air_spin_arc[7] = {3,4,5,6,5,4,3};
+    static const uint8_t air_down_arc[7] = {6,6,5,4,3,2,1};
+    pose = s->air ? ((s->modern.reserved&2) ?
+        air_down_arc[pose] : air_spin_arc[pose]) : arc[s->combo%3][pose];
   }
   return poses + (size_t)(138 + pose + (s->air ? 7 : 0)) * MMX_ZERO_WIDTH * MMX_ZERO_HEIGHT;
 }
@@ -775,7 +795,7 @@ void MmxZeroPlayerMotion(uint8_t r[0x20000], unsigned object) {
   r[0xbfa] = 0x20;
 }
 static bool start_slash(uint8_t *r) {
-  if (modern_behavior && (r[0xbd3] & 4) && terrain_query && standing_blocked(r)) return false;
+  if ((modern_behavior || saber_only) && (r[0xbd3] & 4) && terrain_query && standing_blocked(r)) return false;
   unsigned d = free_projectile(r);
   if (!d) return false;
   end_air_dash(r);
@@ -805,7 +825,7 @@ void MmxZeroPlayerTick(uint8_t r[0x20000]) {
   bool held = (r[0xbdf] & 64) != 0, pressed = (r[0xbe3] & 64) != 0;
   /* Classic X3 keeps its buster. R2 + Shoot opens the storm combo;
    * subsequent distinct Shoot presses chain it. Modern keeps direct Shoot. */
-  if(!modern_behavior && !state.slash && !state.burst) {
+  if(!saber_only && !modern_behavior && !state.slash && !state.burst) {
     bool fresh_press=pressed && !(state.modern.slash_buffer&8);
     /* Track Attack release even while charging the original X3 buster. */
     state.modern.slash_buffer=held ? 8 : 0;
@@ -817,7 +837,7 @@ void MmxZeroPlayerTick(uint8_t r[0x20000]) {
       goto slash_update;
     }
   }
-  if (modern_behavior || MmxZeroStormSlash(&state)) {
+  if (saber_only || modern_behavior || MmxZeroStormSlash(&state)) {
     /* The SNES fresh edge alone can be synthesized while Attack is held.
      * Serialize our own release latch: a held button cannot auto-repeat. */
     unsigned previous=state.modern.slash_buffer & 8;
@@ -849,7 +869,7 @@ void MmxZeroPlayerTick(uint8_t r[0x20000]) {
       /* Never cancel before the active hit and finisher emission. */
       unsigned cancel_age=state.combo==2 ? 26 : 21;
       if (state.slash > 44 || (combo_queued && state.slash>=cancel_age)) {
-        unsigned next=state.combo==2 ? 0 : state.combo+1;
+        unsigned next=state.air || state.combo==2 ? 0 : state.combo+1;
         unsigned held_latch=state.modern.slash_buffer&8;
         unsigned cosmic=state.modern.reserved&1;
         bool chain=combo_queued && state.slash>=cancel_age;
@@ -860,12 +880,14 @@ void MmxZeroPlayerTick(uint8_t r[0x20000]) {
         if (chain && start_slash(r)) {
           state.combo=(uint8_t)next;
           state.saber_ready=classic_storm ? 1 : (next!=0);
-          state.modern.reserved=(uint8_t)(cosmic | (MmxZeroCosmicTriggerHeld()?1:0));
+          state.modern.reserved=(uint8_t)((cosmic&1) | (MmxZeroCosmicTriggerHeld()?1:0) |
+              ((state.air && (r[0xbdf]&4))?2:0));
           state.modern.slash_buffer=(uint8_t)(held_latch | (pending - 1));
         }
       }
     } else if (fresh_press && start_slash(r)) {
-      state.modern.reserved=MmxZeroCosmicTriggerHeld() ? 1 : 0;
+      state.modern.reserved=(uint8_t)((MmxZeroCosmicTriggerHeld()?1:0) |
+          ((state.air && (r[0xbdf]&4))?2:0));
       state.modern.slash_buffer=held ? 8 : 0;
     }
     clear_charge(r);
@@ -960,7 +982,7 @@ slash_update:
       if (state.slash >= 7 && !state.modern.hit_phase) {
         state.modern.hit_phase = 1;
         if(state.combo==2 && storm_emitter &&
-            (!modern_behavior || (state.modern.reserved&1))) storm_emitter(r);
+            ((!modern_behavior && !saber_only) || (state.modern.reserved&1))) storm_emitter(r);
       }
     }
     r[0xbde] = 0; r[0xbe2] = r[0xbe3] = 0;
