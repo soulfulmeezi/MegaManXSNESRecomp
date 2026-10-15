@@ -8,9 +8,14 @@
 #include "mmx_weapon_combat.h"
 #include "mmx_coop_view.h"
 #include "mmx_x_earth_sections.h"
+#include "mmx_armor_finish.h"
+static bool armor_finish_enabled=true;
 #include "mmx_cosmic.h"
 #include "mmx_cosmic_upgrade_vfx.h"
 #include "mmx_cosmic_sky.h"
+#include "mmx_environment_fx.h"
+#include "mmx_weapon_fx.h"
+#include "mmx_movement_fx.h"
 #include "mmx_hover_traffic.h"
 #include "mmx_near_road_cars.h"
 #include "mmx_traffic_telemetry.h"
@@ -849,7 +854,8 @@ static void sprite(const Ppu *p, const Raster *r, int x, int sy, unsigned attr, 
         if (earth->facing_left) local_x = -local_x;
         unsigned section = earth_x_section(earth->object, local_x, local_y);
         object_color[dest] = MmxEarthXFaceDetail(earth->object,section,local_x,local_y) ? color :
-            MmxEarthXArmorPixel(color, section, local_x, local_y);
+            (armor_finish_enabled?MmxEarthFinishedPixel(color,section,local_x,local_y):
+             MmxEarthXArmorPixel(color,section,local_x,local_y));
       }
       if (x + c < 0 || x + c >= 256) ++stats.margin_sprite_pixels;
     }
@@ -1052,18 +1058,38 @@ static unsigned cosmic_lights(CosmicLight *lights,unsigned count,const uint8_t *
   }
   return count;
 }
+static void movement_effects_row(const uint8_t *body,bool zero,unsigned tick,
+    int y,MmxRenderView view,uint16_t *objects,int *colors) {
+  if(body[1]!=2 || !(body[0x27]&127))return;
+  unsigned action=body[2];
+  if(action!=0x14 && action!=0x0a)return;
+  int cx=(int)word(body,5)-view_camera(frame.ram,0x1e4d);
+  int cy=(int)word(body,8)-view_camera(frame.ram,0x1e50);
+  int row=y-cy;
+  if(row< -18 || row>19)return;
+  for(int x=-42;x<=24;x++) {
+    int color=MmxMovementFxPixel(action,body[0x2b]&4,zero,tick,x,row);
+    int dx=cx+((body[0x69]&64)?x:-x)+view.extra;
+    if(color>=0 && dx>=0 && dx<view.width) {
+      objects[dx]=0xc681;colors[dx]=color;
+    }
+  }
+}
 static void weapon_effects_row(const MmxWeaponCombatState *combat,const Ppu *p,const Raster *r,
-                               int y,MmxRenderView view,uint16_t *objects,int *object_colors,int upgrade_vfx) {
+                               int y,MmxRenderView view,bool enhanced,
+                               uint16_t *objects,int *object_colors,int upgrade_vfx) {
   for (unsigned i=0;i<24;++i) {
     const MmxWeaponShot *s=i<8 ? combat->shots+i : combat->effects+i-8;
     if (!s->active || !s->age) continue;
     if(s->page==MMX_COSMIC_PAGE) {
       int cy=(s->y>>8)-view_camera(frame.ram,0x1e50);
-      int row=y-cy;if(row < -28 || row>19) continue;
+      int row=y-cy;if(row < -36 || row>30) continue;
       int cx=(s->x>>8)-view_camera(frame.ram,0x1e4d);
-      for(int col=-24;col<=24;++col) {
-        int color=MmxCosmicShotPixel(s->weapon,s->age,s->facing?col:-col,row);
-        if(color<0 && upgrade_vfx) color=MmxCosmicUpgradeSparkPixel(s->weapon,s->age,s->facing?col:-col,row);
+      for(int col=-40;col<=40;++col) {
+        int px=s->facing?col:-col;
+        int color=MmxCosmicShotPixel(s->weapon,s->age,px,row);
+        if(color<0 && enhanced) color=MmxFxWeaponDetailPixel(s->weapon,s->age,px,row);
+        if(color<0 && upgrade_vfx) color=MmxCosmicUpgradeSparkPixel(s->weapon,s->age,px,row);
         int dx=cx+col+view.extra;
         if(color>=0 && dx>=0 && dx<view.width) {objects[dx]=0xe681;object_colors[dx]=color;}
       }
@@ -1248,13 +1274,15 @@ static void coop_partner_row(const Ppu *ppu,const Raster *r,int y,MmxRenderView 
     if (body && row>=0 && row<128 && (!pilot || (row>=44 && row<64))) for (int col=0;col<128;++col) {
       unsigned pixel = body[row*128+col];
       unsigned blade_pixel=blade ? blade[row*128+col] : 0;
+      int saber_vfx=MmxZeroSaberVfxPixel(&partner->zero,(unsigned)col,(unsigned)row);
       if (blade_pixel) pixel=blade_pixel;
       int dest = x + ((ram[0xbb9]&64) ? 63-col : col-64) + view.extra;
-      if (pixel && dest>=0 && dest<view.width) {
-        objects[dest] = (uint16_t)(priority|0x680|(pixel&15));
+      if ((pixel || saber_vfx>=0) && dest>=0 && dest<view.width) {
+        objects[dest] = (uint16_t)(priority|0x680|(pixel ? pixel&15 : 8));
         uint16_t base=pixel>=16 && pixel<32 ?
             MmxZeroBodyColors(&partner->zero)[pixel-16] : MmxZeroColors()[pixel];
-        colors[dest]=blade_pixel ? MmxZeroStormBladeColor(&partner->zero,base) :
+        colors[dest]=saber_vfx>=0 ? (uint16_t)saber_vfx :
+            blade_pixel ? MmxZeroStormBladeColor(&partner->zero,base) :
             MmxZeroJupiterStripeColor(body,pixel,(unsigned)col,(unsigned)row,base);
       }
       if (charge && charge[row*128+col] && dest>=0 && dest<view.width) {
@@ -1514,11 +1542,19 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
   int16_t crystal_ripple[224];MmxWeaponsTimeRipple(&frame_weapon_combat,crystal_ripple);
   CosmicLight lights[18];unsigned light_count=0;
   /* Legacy traffic is explicitly opt-in. The debug-only build adds no cars. */
+  /* Modular CosmicFX cloud layer is on only in playable stage skies.
+   * Opt out via MMX_CLOUD_FX=0; leave original v33 gameplay untouched. */
+  const int cloud_fx=stage && !palette_fade && !swapping &&
+      frame.ram[0xd3]==4 && mmx_traffic_env_enabled("MMX_CLOUD_FX",1);
+  armor_finish_enabled=mmx_traffic_env_enabled("MMX_ARMOR_FINISH",1);
+  const int movement_fx=stage && !palette_fade && !swapping &&
+      mmx_traffic_env_enabled("MMX_MOVEMENT_FX",1);
+  const int weapon_fx=stage && mmx_traffic_env_enabled("MMX_WEAPON_FX",1);
   const int legacy_traffic=mmx_traffic_env_enabled("MMX_TRAFFIC_LEGACY",0);
-  const int debug_lanes=mmx_traffic_env_enabled("MMX_TRAFFIC_DEBUG_LANES",1);
-  const int near_cars=mmx_traffic_env_enabled("MMX_NEAR_ROAD_CARS",0);
-  const int upgrade_vfx=mmx_traffic_env_enabled("MMX_COSMIC_UPGRADE_VFX",0);
-  const int enhanced_sky=mmx_traffic_env_enabled("MMX_COSMIC_SKY_MOTION",0);
+  const int debug_lanes=mmx_traffic_env_enabled("MMX_TRAFFIC_DEBUG_LANES",0);
+  const int near_cars=mmx_traffic_env_enabled("MMX_NEAR_ROAD_CARS",1);
+  const int upgrade_vfx=mmx_traffic_env_enabled("MMX_COSMIC_UPGRADE_VFX",1);
+  const int enhanced_sky=mmx_traffic_env_enabled("MMX_COSMIC_SKY_MOTION",1);
   const int near_halo=mmx_traffic_env_enabled("MMX_NEAR_ROAD_HALO",0);
   const int debug_telemetry=mmx_traffic_env_enabled("MMX_TRAFFIC_DEBUG_STATS",0);
   const int highway_scene=stage && frame.ram[0x1f7a]==0 && frame.ram[0xd3]==4;
@@ -1599,6 +1635,16 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
     uint16_t objects[MMX_RENDER_MAX_WIDTH] = {0};
     int object_colors[MMX_RENDER_MAX_WIDTH];
     for (int x = 0; x < view.width; ++x) object_colors[x] = -1;
+    if(movement_fx) {
+      movement_effects_row(frame.ram+0xba8,MmxZeroEnabled() && !frame_zero.active_x,
+          frame_weapon_combat.tick,y,view,objects,object_colors);
+      if(frame_coop.initialized && !frame_coop.scene_owner) {
+        const MmxCoopPlayer *partner=&frame_coop.players[frame_coop.current^1];
+        if(partner->status==MMX_COOP_ALIVE)
+          movement_effects_row(partner->body,partner->character==MMX_COOP_ZERO,
+              partner->combat.tick,y,view,objects,object_colors);
+      }
+    }
     for (int i = (int)waiting_count - 1; i >= 0; --i) {
       Piece s = waiting[i];
       const MmxSpriteAsset *asset = s.animation == 0x53 ? waiting_zero : NULL;
@@ -1698,10 +1744,11 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
               unsigned pixel = body[row * MMX_ZERO_WIDTH + col];
               unsigned blade_pixel=!menu_body && blade ?
                   blade[row * MMX_ZERO_WIDTH + col] : 0;
+              int saber_vfx=!menu_body ? MmxZeroSaberVfxPixel(&frame_zero,(unsigned)col,(unsigned)row) : -1;
               if (blade_pixel) pixel=blade_pixel;
               int dx = zx + ((!menu_body && (frame.ram[0xbb9] & 64)) ? 63 - col : col - 64) + view.extra;
-              if (pixel && dx >= 0 && dx < view.width) {
-                objects[dx] = (uint16_t)(z | (pixel & 15));
+              if ((pixel || saber_vfx>=0) && dx >= 0 && dx < view.width) {
+                objects[dx] = (uint16_t)(z | (pixel ? pixel & 15 : 8));
                 /* Charged Sting cycles X1's live player palette. Map Zero's
                  * material/shade roles to that palette instead of discarding
                  * the native cycle; skin and the dark outline remain legible. */
@@ -1716,6 +1763,7 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
                   object_colors[dx]=menu_body || pilot || blade_pixel ? base :
                       MmxZeroJupiterStripeColor(body,pixel,(unsigned)col,(unsigned)row,base);
                   if(blade_pixel) object_colors[dx]=MmxZeroStormBladeColor(&frame_zero,base);
+                  if(saber_vfx>=0) object_colors[dx]=saber_vfx;
                 }
               }
             }
@@ -1819,9 +1867,9 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
       }
     }
     if (stage && !swapping) {
-      weapon_effects_row(&frame_weapon_combat,&p,r,y,view,objects,object_colors,upgrade_vfx);
+      weapon_effects_row(&frame_weapon_combat,&p,r,y,view,weapon_fx,objects,object_colors,upgrade_vfx);
       if (frame_coop.initialized && frame_coop.players[frame_coop.current^1].status==MMX_COOP_ALIVE && !frame_coop.scene_owner)
-        weapon_effects_row(&frame_coop.players[frame_coop.current^1].combat,&p,r,y,view,objects,object_colors,upgrade_vfx);
+        weapon_effects_row(&frame_coop.players[frame_coop.current^1].combat,&p,r,y,view,weapon_fx,objects,object_colors,upgrade_vfx);
     }
     if (swapping) teleport_actor_row(frame.ram,&frame_zero,&p,r,y,view,objects,object_colors);
     if(coop_hud) coop_hud_row(&p,r,y,view,hud,objects,object_colors);
@@ -1881,6 +1929,18 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
             mmx_city_ambience_without_traffic(x+view_camera(frame.ram,0x1e4d)/8,y,
                 frame_weapon_combat.tick,base,enhanced_sky);
         if(activity>=0) bg_colors[1]=activity;
+      }
+      /* Cloud banks are authored in three independently scrolling depth
+       * planes on BG2. Native BG1 structures, OAM characters, masks and
+       * color math still have their original precedence. */
+      if(cloud_fx && !bg[0] && bg[1]) {
+        uint16_t source=bg_colors[1]>=0?(uint16_t)bg_colors[1]:r->palette[bg[1]&255];
+        int sky=frame.ram[0x1f7a]==0 ?
+            MmxFxHighwayCloudPixel(source,x,y,
+                view_camera(frame.ram,0x1e4d),frame_weapon_combat.tick) :
+            MmxFxAtmospherePixel(source,x,y,
+                view_camera(frame.ram,0x1e4d),frame_weapon_combat.tick);
+        if(sky>=0)bg_colors[1]=sky;
       }
       for(unsigned i=0;i<car_count;++i) {
         const LowerCar *car=cars+i;unsigned layer=0;

@@ -181,7 +181,54 @@ static void storm_combo_checks(void) {
   MmxZeroSetCosmicTrigger(false);
   MmxZeroSetStormEmitter(NULL);MmxZeroSetModern(false);MmxZeroResetState();player();
 }
+
+/* Sword-only gameplay must disable all Zero buster/charge behavior, while
+ * using visibly distinct body and blade phases for ground, air, and air-down. */
+static void saber_only_visual_checks(void) {
+  /* This fixture starts in open space, independent of the low-ceiling case. */
+  MmxZeroSetTerrainQuery(NULL);
+  MmxZeroSetModern(false); MmxZeroSetSaberOnly(true);
+  MmxZeroSetCosmicTrigger(false); MmxZeroResetState(); player();
+  assert(MmxZeroSaberOnly());
+  tick(64,64);
+  MmxZeroState s=MmxZeroGetState();
+  assert(s.slash==1 && !s.burst && !s.charge && MmxZeroStormSlash(&s));
+  for(unsigned i=0;i<3;++i) tick(0,0);
+  s=MmxZeroGetState();
+  assert((MmxZeroPose(ram,&s)-MmxZeroMenuPose())/16384==119);
+  assert((MmxZeroBlade(&s)-MmxZeroMenuPose())/16384==138);
+  assert(MmxZeroSaberVfxPixel(&s,84,60)>=0);
+  assert(MmxZeroSaberVfxPixel(&s,64,60)<0);
+  for(unsigned i=0;i<50;++i) tick(64,0);
+  tick(0,0);
+  assert(!MmxZeroGetState().charge && !MmxZeroGetState().burst);
+
+  MmxZeroResetState(); player();
+  ram[0xbd3]=0; ram[0xbaa]=8;
+  tick(64,64);
+  for(unsigned i=0;i<3;++i) tick(0,0);
+  s=MmxZeroGetState();
+  assert(s.air && !(s.modern.reserved&2));
+  assert((MmxZeroPose(ram,&s)-MmxZeroMenuPose())/16384==128);
+  assert((MmxZeroBlade(&s)-MmxZeroMenuPose())/16384==148);
+  assert(MmxZeroSaberVfxPixel(&s,89,60)>=0);
+
+  MmxZeroResetState(); player();
+  ram[0xbd3]=0; ram[0xbaa]=8;
+  tick(68,64); /* Hold Down + fresh Attack while airborne. */
+  for(unsigned i=0;i<3;++i) tick(0,0);
+  s=MmxZeroGetState();
+  assert(s.air && (s.modern.reserved&2));
+  assert((MmxZeroPose(ram,&s)-MmxZeroMenuPose())/16384==129);
+  assert((MmxZeroBlade(&s)-MmxZeroMenuPose())/16384==151);
+  assert(MmxZeroSaberVfxPixel(&s,79,80)>=0);
+  assert(MmxZeroValidState(&s));
+  MmxZeroSetSaberOnly(false); MmxZeroResetState(); player();
+}
+
 int main(void) {
+  /* Existing X3-compatibility checks intentionally exercise the legacy mode. */
+  MmxZeroSetSaberOnly(false);
   player(); memcpy(before, ram, sizeof(ram));
   tick(0,0); assert(!memcmp(before, ram, sizeof(ram)));
   /* Final Zero-only combat modifier: three times effective damage on
@@ -367,6 +414,7 @@ int main(void) {
   MmxZeroState start = MmxZeroGetState(); start.active_x = 0; MmxZeroSetState(start);
   assert(MmxZeroActive()); /* A saved character wins over the start choice. */
   MmxZeroSetStartCharacter(false); MmxZeroResetState(); assert(MmxZeroActive());
+  saber_only_visual_checks();
   modern_checks();
   saber_press_flow_checks();
   storm_combo_checks();
