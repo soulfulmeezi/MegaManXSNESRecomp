@@ -404,8 +404,8 @@ static unsigned slash_pose(const MmxZeroState *s) {
     {6,6,5,5,4,3,2,1,1,0,0}, /* low-to-high backswing */
     {0,2,3,3,4,5,6,6,4,1,0}  /* overhead heavy finisher */
   };
-  static const uint8_t air_spin[] = {1,2,4,6,5,3,0,2,4,1,0};
-  static const uint8_t air_down[] = {0,1,5,6,6,6,4,3,2,1,0};
+  static const uint8_t air_spin[] = {1,2,4,4,6,5,3,0,2,1,0};
+  static const uint8_t air_down[] = {0,1,5,5,6,6,4,3,2,1,0};
   unsigned age = s->slash;
   for (unsigned i = 0; i < sizeof(duration); ++i) {
     if (age < duration[i]) {
