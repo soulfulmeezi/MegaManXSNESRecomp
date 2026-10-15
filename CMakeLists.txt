@@ -128,6 +128,12 @@ add_mmx_variant(RockmanXSNESRecomp "${CMAKE_CURRENT_SOURCE_DIR}/variants/jp/gen"
 
 include(CTest)
 if(BUILD_TESTING)
+    # Safe opt-in Cosmic Constellation core, detached from live gameplay/ROMs.
+    add_executable(mmx_cosmic_core_test
+        tests/mmx_cosmic_core_test.c src/mmx_cosmic_core.c)
+    target_include_directories(mmx_cosmic_core_test PRIVATE src)
+    add_test(NAME mmx_cosmic_core COMMAND mmx_cosmic_core_test)
+
     # ROM-free unit coverage for the CPU companion's no-progress jump memory.
     add_executable(mmx_cpu_antistuck_test tests/mmx_cpu_antistuck_test.c)
     target_include_directories(mmx_cpu_antistuck_test PRIVATE src)
@@ -166,7 +172,7 @@ if(BUILD_TESTING)
     add_test(NAME mmx_custom_renderer COMMAND mmx_renderer_test)
     add_executable(mmx_render_capture tools/mmx_render_capture.c src/mmx_renderer.c src/mmx_render_assets.c src/mmx_display.c src/mmx_wide_policy.c src/mmx_zero.c src/mmx_weapons.c src/mmx_weapon_combat.c src/mmx_coop_view.c)
     target_include_directories(mmx_render_capture PRIVATE src ${SNESRECOMP_ROOT}/runner/src)
-    foreach(mmx_test mmx_display_test mmx_wide_policy_test mmx_renderer_test mmx_password_save_test mmx_zero_test mmx_cpu_antistuck_test mmx_cpu_deep_descent_test mmx_cpu_jump_learning_test mmx_future_zero_test)
+    foreach(mmx_test mmx_display_test mmx_wide_policy_test mmx_renderer_test mmx_password_save_test mmx_zero_test mmx_cpu_antistuck_test mmx_cpu_deep_descent_test mmx_cpu_jump_learning_test mmx_future_zero_test mmx_cosmic_core_test)
         if(MSVC)
             target_compile_options(${mmx_test} PRIVATE /UNDEBUG)
         else()
