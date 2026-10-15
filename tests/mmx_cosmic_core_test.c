@@ -78,7 +78,7 @@ static void corrupted_state_is_rejected(void) {
   s.specialization[0] = MMX_COSMIC_FORCE;
   assert(!MmxCosmicStateValid(&s));
   MmxCosmicReset(&s);
-  s.unlocked = 0x1000;
+  s.unlocked = (uint16_t)(1u << MMX_COSMIC_ASPECT_COUNT);
   assert(!MmxCosmicStateValid(&s));
   MmxCosmicReset(&s);
   s.last_reward = 7;

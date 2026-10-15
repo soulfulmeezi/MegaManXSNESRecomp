@@ -4,6 +4,7 @@
 #include "mmx_zero.h"
 #include "mmx_weapon_combat.h"
 #include "mmx_cosmic.h"
+#include "mmx_cosmic_sky.h"
 #include "mmx_traffic_telemetry.h"
 #include "mmx_hover_traffic.h"
 #include "mmx_knc_bugfix.h"
@@ -1227,7 +1228,14 @@ static void cosmic_combat(void) {
   MmxWeaponCombatState saved=MmxWeaponsGetCombatState();
   assert(saved.shots[0].page==MMX_COSMIC_PAGE && saved.shots[0].weapon==MMX_EARTH_WAVE);
   assert(saved.shots[0].x==118*256 && saved.shots[0].y==102*256);
-  assert(MmxWeaponsValidCombatState(&saved) && !(ram[0xbe3]&64));
+  assert(MmxWeaponsValidCombatState(&saved) && !(ram[0xbe3]&64) && !(ram[0xbdf]&64));
+  /* Releasing R2 or pressing Shoot during the active wave must never
+   * produce X1 buster input. The original movement buttons remain live. */
+  MmxZeroSetCosmicTrigger(false);
+  ram[0xbdf]=0x44;ram[0xbe3]=0x44;MmxWeaponsPlayerTick(ram);
+  assert(!(ram[0xbe3]&64) && !(ram[0xbdf]&64));
+  assert((ram[0xbe3]&4) && (ram[0xbdf]&4));
+  MmxZeroSetCosmicTrigger(true);
   MmxWeaponsSetCombatState(saved);
   MmxWeaponCombatState restored=MmxWeaponsGetCombatState();assert(!memcmp(&saved,&restored,sizeof(saved)));
   ram[0xbe3]=0;MmxWeaponsPlayerTick(ram);MmxWeaponsProjectileTick(ram,0x1228,1);
@@ -1236,10 +1244,15 @@ static void cosmic_combat(void) {
   assert(MmxWeaponsFinalDamage(ram,0xe68,0x1228,3)==0); /* One hit per victim. */
   put_word(0x20ee,1);MmxWeaponsPlayerTick(ram);MmxWeaponsProjectileTick(ram,0x1228,1);
   assert(!ram[0x1228]); /* A gap retires the ground wave. */
+  /* With the wave gone, ordinary Shoot works again without R2. */
+  MmxZeroSetCosmicTrigger(false);
+  ram[0xbdf]=ram[0xbe3]=64;MmxWeaponsPlayerTick(ram);
+  assert(ram[0xbe3]&64);
+  MmxZeroSetCosmicTrigger(true);
   put_word(0x20ee,0);
   for(unsigned i=0;i<3;++i) {ram[0xbdf]=64;ram[0xbe3]=64;MmxWeaponsPlayerTick(ram);}
   saved=MmxWeaponsGetCombatState();assert(saved.shots[0].active && saved.shots[1].active && !saved.shots[2].active);
-  assert(ram[0xbe3]&64); /* Full pool falls back to the normal weapon. */
+  assert(!(ram[0xbe3]&64) && !(ram[0xbdf]&64)); /* Full pool cannot fire X-Buster during Earth Wave. */
   ++ram[0x1f7a];ram[0xbe3]=0;MmxWeaponsPlayerTick(ram);assert(!ram[0x1228] && !ram[0x1268]);
   MmxZeroSetCosmicTrigger(false);
   MmxZeroSetStartCharacter(false);MmxZeroResetState();
@@ -1255,6 +1268,17 @@ static void cosmic_combat(void) {
     assert(MmxEarthDamageBoost(c,0,0xe68,0x1228)==c);
     assert(MmxEarthDamageBoost(c,1,0xba8,0x1228)==c);
   }
+  /* Synthetic palette-only sky coverage and deterministic wind motion. */
+  assert(MmxCosmicSkyImpactPixel(20,10,0,MmxCosmicRgb(10,7,10))<0);
+  assert(MmxCosmicSkyImpactPixel(20,40,0,MmxCosmicRgb(2,3,5))<0);
+  unsigned gust_pixels=0,gust_movement=0;
+  for(int yy=16;yy<100;++yy)for(int xx=0;xx<256;++xx) {
+    int before=MmxCosmicSkyImpactPixel(xx,yy,0,MmxCosmicRgb(10,7,10));
+    int after=MmxCosmicSkyImpactPixel(xx,yy,12,MmxCosmicRgb(10,7,10));
+    gust_pixels+=(before>=0);
+    gust_movement+=(before!=after);
+  }
+  assert(gust_pixels>200 && gust_movement>200);
   unsigned clouds=0,traffic=0,windows=0,motion=0,lower_street=0;
   for(int y=0;y<224;++y) for(int x=0;x<256;++x) {
     uint16_t sky=MmxCosmicRgb(10,7,10);

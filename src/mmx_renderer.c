@@ -10,6 +10,7 @@
 #include "mmx_x_earth_sections.h"
 #include "mmx_cosmic.h"
 #include "mmx_cosmic_upgrade_vfx.h"
+#include "mmx_cosmic_sky.h"
 #include "mmx_hover_traffic.h"
 #include "mmx_near_road_cars.h"
 #include "mmx_traffic_telemetry.h"
@@ -989,7 +990,11 @@ typedef struct CosmicLight { int x,y; unsigned power,kind; } CosmicLight;
 typedef MmxHoverCar LowerCar;
 /* Original city cloud and window ambience without the legacy road-car pixels.
  * This retains the background when the old color-check traffic is disabled. */
-static int mmx_city_ambience_without_traffic(int x,int y,unsigned tick,uint16_t base) {
+static int mmx_city_ambience_without_traffic(int x,int y,unsigned tick,uint16_t base,int enhanced_sky) {
+  if(enhanced_sky) {
+    int cloud=MmxCosmicSkyImpactPixel(x,y,tick,base);
+    if(cloud>=0)return cloud;
+  }
   unsigned r=base&31,g=(base>>5)&31,b=(base>>10)&31;
   int sky=r>=8 && r<=14 && g>=5 && g<=10 && b>=7 && b<=14 && r>g;
   if(sky && y>=16 && y<100) {
@@ -1513,6 +1518,7 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
   const int debug_lanes=mmx_traffic_env_enabled("MMX_TRAFFIC_DEBUG_LANES",1);
   const int near_cars=mmx_traffic_env_enabled("MMX_NEAR_ROAD_CARS",0);
   const int upgrade_vfx=mmx_traffic_env_enabled("MMX_COSMIC_UPGRADE_VFX",0);
+  const int enhanced_sky=mmx_traffic_env_enabled("MMX_COSMIC_SKY_MOTION",0);
   const int near_halo=mmx_traffic_env_enabled("MMX_NEAR_ROAD_HALO",0);
   const int debug_telemetry=mmx_traffic_env_enabled("MMX_TRAFFIC_DEBUG_STATS",0);
   const int highway_scene=stage && frame.ram[0x1f7a]==0 && frame.ram[0xd3]==4;
@@ -1873,7 +1879,7 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
             MmxCityActivityPixel(x+view_camera(frame.ram,0x1e4d)/8,y,
                 frame_weapon_combat.tick,base):
             mmx_city_ambience_without_traffic(x+view_camera(frame.ram,0x1e4d)/8,y,
-                frame_weapon_combat.tick,base);
+                frame_weapon_combat.tick,base,enhanced_sky);
         if(activity>=0) bg_colors[1]=activity;
       }
       for(unsigned i=0;i<car_count;++i) {
