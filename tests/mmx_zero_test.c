@@ -97,6 +97,18 @@ static void modern_checks(void) {
 int main(void) {
   player(); memcpy(before, ram, sizeof(ram));
   tick(0,0); assert(!memcmp(before, ram, sizeof(ram)));
+  /* Final Zero-only combat modifier: three times effective damage on
+   * real enemy/projectile collision rows, never on X or an immune hit. */
+  assert(MmxZeroDamageBoost(3,true,0xe68,0x1228)==9);
+  assert(MmxZeroDamageBoost(16,true,0xe68,0x1228)==48);
+  assert(MmxZeroDamageBoost(50,true,0xe68,0x1228)==127);
+  assert(MmxZeroDamageBoost(3,false,0xe68,0x1228)==3);
+  assert(MmxZeroDamageBoost(0,true,0xe68,0x1228)==0);
+  assert(MmxZeroDamageBoost(128,true,0xe68,0x1228)==128);
+  assert(MmxZeroDamageBoost(255,true,0xe68,0x1228)==255);
+  assert(MmxZeroDamageBoost(3,true,0xba8,0x1228)==3);
+  assert(MmxZeroDamageBoost(3,true,0xe68,0x1428)==3);
+  assert(MmxZeroDamageBoost(3,true,0xe68,0x1229)==3);
   assert(MmxZeroUpgradeBits(0x81971c, 0) == 0);
   asset("zero-test.bin"); assert(MmxZeroLoad("zero-test.bin"));
   assert(MmxZeroUpgradeBits(0x81971c, 2) == 10);

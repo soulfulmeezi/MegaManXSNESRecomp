@@ -832,6 +832,19 @@ unsigned MmxZeroWeaponTick(uint8_t r[0x20000], unsigned d, unsigned active) {
   }
   return 0; /* Our transient melee object has no native projectile update. */
 }
+/* Multiply genuine damage from Zero's native projectile pool after the
+ * original weapon/boss susceptibility logic has run. Do not turn zero
+ * damage or native immunity/special high-bit sentinels into damage.
+ * Byte-sized native enemy HP supports at most 127 as a normal hit. */
+unsigned MmxZeroDamageBoost(unsigned damage,bool zero_active,
+                            unsigned enemy,unsigned projectile) {
+  if (!zero_active || !damage || damage>=128 ||
+      enemy<0xe68 || enemy>=0x1228 || (enemy&63)!=0x28 ||
+      projectile<0x1228 || projectile>=0x1428 ||
+      ((projectile-0x1228)&63)) return damage;
+  unsigned boosted=damage*3u;
+  return boosted>127u ? 127u : boosted;
+}
 unsigned MmxZeroDamage(uint8_t r[0x20000], unsigned enemy, unsigned projectile, unsigned original) {
   if (!poses || !own_projectile(r, projectile) || projectile != state.projectile ||
       enemy < 0xe68 || enemy >= 0x1228 || (enemy & 63) != 0x28 || !original || (original & 128)) return original;
