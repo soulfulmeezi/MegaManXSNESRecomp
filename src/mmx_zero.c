@@ -471,6 +471,51 @@ const uint8_t *MmxZeroBlade(const MmxZeroState *s) {
   }
   return poses + (size_t)(138 + pose + (s->air ? 7 : 0)) * MMX_ZERO_WIDTH * MMX_ZERO_HEIGHT;
 }
+/* Pixel-grid sword choreography accents. Draw these in the same 128x128
+ * authored Zero sprite space and mirror with the ordinary facing transform.
+ * Color -1 means transparent; these are deliberately chunky 16-bit pixels. */
+int MmxZeroSaberVfxPixel(const MmxZeroState *s, unsigned col, unsigned row) {
+  if(!s || !MmxZeroStormSlash(s) || s->slash<7 || s->slash>31 ||
+      col>=MMX_ZERO_WIDTH || row>=MMX_ZERO_HEIGHT) return -1;
+  int x=(int)col-64, y=(int)row-60;
+  int age=(int)(s->slash-7)/4;
+  if(s->air) {
+    if(s->modern.reserved&2) {
+      /* Down + Attack: a narrow saber point aimed below Zero, not a ring. */
+      int dx=x-15; if(dx<0) dx=-dx;
+      if(y>=0 && y<=40 && dx <= (y>32?3:1))
+        return dx==0 ? MmxCosmicRgb(31,31,25) : MmxCosmicRgb(31,17,4);
+      if(y>=35 && y<=43 && dx<=5 && (dx+y)%3==0)
+        return MmxCosmicRgb(31,23,8);
+      return -1;
+    }
+    /* Aerial Attack: an animated half-ring sweep around the airborne body.
+     * The active half advances through quadrants instead of inheriting
+     * the same ground arc. */
+    int distance=x*x+y*y, quadrant=age&3;
+    bool active=quadrant==0 ? x>=0 : quadrant==1 ? y<=0 :
+        quadrant==2 ? x<=0 : y>=0;
+    if(active && distance>=22*22 && distance<=25*25)
+      return distance<23*23 ? MmxCosmicRgb(31,31,26) : MmxCosmicRgb(7,26,31);
+    return -1;
+  }
+  if(s->combo==0) {
+    /* Level horizontal slash. */
+    if(x>=12 && x<=39 && y>=-2 && y<=2)
+      return y==0 ? MmxCosmicRgb(31,31,26) : MmxCosmicRgb(9,24,31);
+  } else if(s->combo==1) {
+    /* Rising diagonal slash. */
+    int d=y-(30-x); if(d<0) d=-d;
+    if(x>=10 && x<=40 && d<=2)
+      return d==0 ? MmxCosmicRgb(31,31,26) : MmxCosmicRgb(31,22,8);
+  } else {
+    /* Third strike is a high, weighty overhead line with a broad tip. */
+    int d=x-20; if(d<0) d=-d;
+    if(y>=-36 && y<=13 && d<=(y<-23?3:1))
+      return d==0 ? MmxCosmicRgb(31,31,26) : MmxCosmicRgb(31,13,3);
+  }
+  return -1;
+}
 void MmxZeroSetCollisionRom(uint8_t *rom, size_t size) {
   if (!rom || size < 0x37fd8) return;
   /* X3 $86:B40E / B422, translated -8px vertically into X1's player origin.
