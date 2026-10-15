@@ -45,6 +45,8 @@ const uint8_t *MmxZeroTeleportPose(unsigned pose);
 int MmxZeroPoseOffsetY(const uint8_t ram[0x20000]);
 const uint8_t *MmxZeroPose(const uint8_t ram[0x20000], const MmxZeroState *snapshot);
 const uint8_t *MmxZeroBlade(const MmxZeroState *snapshot);
+/* RGB555 overlay color or -1 for transparent pixels. */
+int MmxZeroSaberVfxPixel(const MmxZeroState *snapshot, unsigned col, unsigned row);
 const uint16_t *MmxZeroColors(void);
 /* Per-pixel Jupiter cloud belts: called only while drawing Zero's armor. */
 uint16_t MmxZeroJupiterStripeColor(const uint8_t *pose,
@@ -89,6 +91,9 @@ void MmxZeroResetState(void);
 /* Start new sessions as X instead of Zero; both remain exchangeable. */
 void MmxZeroSetStartCharacter(bool x);
 /* Shared launcher preference; X3 behavior remains the default. */
+/* Cosmic X Zero defaults to sword-only; legacy buster may be restored for tests. */
+void MmxZeroSetSaberOnly(bool enabled);
+bool MmxZeroSaberOnly(void);
 void MmxZeroSetModern(bool enabled);
 bool MmxZeroModern(void);
 /* Physical DualSense R2 state, supplied once per host frame before game ticks. */

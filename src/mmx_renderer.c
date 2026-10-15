@@ -1241,13 +1241,15 @@ static void coop_partner_row(const Ppu *ppu,const Raster *r,int y,MmxRenderView 
     if (body && row>=0 && row<128 && (!pilot || (row>=44 && row<64))) for (int col=0;col<128;++col) {
       unsigned pixel = body[row*128+col];
       unsigned blade_pixel=blade ? blade[row*128+col] : 0;
+      int saber_vfx=MmxZeroSaberVfxPixel(&partner->zero,(unsigned)col,(unsigned)row);
       if (blade_pixel) pixel=blade_pixel;
       int dest = x + ((ram[0xbb9]&64) ? 63-col : col-64) + view.extra;
-      if (pixel && dest>=0 && dest<view.width) {
-        objects[dest] = (uint16_t)(priority|0x680|(pixel&15));
+      if ((pixel || saber_vfx>=0) && dest>=0 && dest<view.width) {
+        objects[dest] = (uint16_t)(priority|0x680|(pixel ? pixel&15 : 8));
         uint16_t base=pixel>=16 && pixel<32 ?
             MmxZeroBodyColors(&partner->zero)[pixel-16] : MmxZeroColors()[pixel];
-        colors[dest]=blade_pixel ? MmxZeroStormBladeColor(&partner->zero,base) :
+        colors[dest]=saber_vfx>=0 ? (uint16_t)saber_vfx :
+            blade_pixel ? MmxZeroStormBladeColor(&partner->zero,base) :
             MmxZeroJupiterStripeColor(body,pixel,(unsigned)col,(unsigned)row,base);
       }
       if (charge && charge[row*128+col] && dest>=0 && dest<view.width) {
@@ -1689,10 +1691,11 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
               unsigned pixel = body[row * MMX_ZERO_WIDTH + col];
               unsigned blade_pixel=!menu_body && blade ?
                   blade[row * MMX_ZERO_WIDTH + col] : 0;
+              int saber_vfx=!menu_body ? MmxZeroSaberVfxPixel(&frame_zero,(unsigned)col,(unsigned)row) : -1;
               if (blade_pixel) pixel=blade_pixel;
               int dx = zx + ((!menu_body && (frame.ram[0xbb9] & 64)) ? 63 - col : col - 64) + view.extra;
-              if (pixel && dx >= 0 && dx < view.width) {
-                objects[dx] = (uint16_t)(z | (pixel & 15));
+              if ((pixel || saber_vfx>=0) && dx >= 0 && dx < view.width) {
+                objects[dx] = (uint16_t)(z | (pixel ? pixel & 15 : 8));
                 /* Charged Sting cycles X1's live player palette. Map Zero's
                  * material/shade roles to that palette instead of discarding
                  * the native cycle; skin and the dark outline remain legible. */
@@ -1707,6 +1710,7 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
                   object_colors[dx]=menu_body || pilot || blade_pixel ? base :
                       MmxZeroJupiterStripeColor(body,pixel,(unsigned)col,(unsigned)row,base);
                   if(blade_pixel) object_colors[dx]=MmxZeroStormBladeColor(&frame_zero,base);
+                  if(saber_vfx>=0) object_colors[dx]=saber_vfx;
                 }
               }
             }
