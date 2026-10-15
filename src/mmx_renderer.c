@@ -9,6 +9,7 @@
 #include "mmx_coop_view.h"
 #include "mmx_x_earth_sections.h"
 #include "mmx_cosmic.h"
+#include "mmx_environment_fx.h"
 #include "mmx_hover_traffic.h"
 #include "mmx_near_road_cars.h"
 #include "mmx_traffic_telemetry.h"
@@ -1507,6 +1508,10 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
   int16_t crystal_ripple[224];MmxWeaponsTimeRipple(&frame_weapon_combat,crystal_ripple);
   CosmicLight lights[18];unsigned light_count=0;
   /* Legacy traffic is explicitly opt-in. The debug-only build adds no cars. */
+  /* Modular CosmicFX cloud layer is on only in playable stage skies.
+   * Opt out via MMX_CLOUD_FX=0; leave original v33 gameplay untouched. */
+  const int cloud_fx=stage && !palette_fade && !swapping &&
+      frame.ram[0xd3]==4 && mmx_traffic_env_enabled("MMX_CLOUD_FX",1);
   const int legacy_traffic=mmx_traffic_env_enabled("MMX_TRAFFIC_LEGACY",0);
   const int debug_lanes=mmx_traffic_env_enabled("MMX_TRAFFIC_DEBUG_LANES",1);
   const int near_cars=mmx_traffic_env_enabled("MMX_NEAR_ROAD_CARS",0);
@@ -1872,6 +1877,15 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
             mmx_city_ambience_without_traffic(x+view_camera(frame.ram,0x1e4d)/8,y,
                 frame_weapon_combat.tick,base);
         if(activity>=0) bg_colors[1]=activity;
+      }
+      /* Cloud banks are authored in three independently scrolling depth
+       * planes on BG2. Native BG1 structures, OAM characters, masks and
+       * color math still have their original precedence. */
+      if(cloud_fx && !bg[0] && bg[1]) {
+        uint16_t source=bg_colors[1]>=0?(uint16_t)bg_colors[1]:r->palette[bg[1]&255];
+        int sky=MmxFxAtmospherePixel(source,x,y,
+            view_camera(frame.ram,0x1e4d),frame_weapon_combat.tick);
+        if(sky>=0)bg_colors[1]=sky;
       }
       for(unsigned i=0;i<car_count;++i) {
         const LowerCar *car=cars+i;unsigned layer=0;
