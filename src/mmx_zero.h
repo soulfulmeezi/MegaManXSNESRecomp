@@ -89,6 +89,9 @@ void MmxZeroResetState(void);
 /* Start new sessions as X instead of Zero; both remain exchangeable. */
 void MmxZeroSetStartCharacter(bool x);
 /* Shared launcher preference; X3 behavior remains the default. */
+/* Cosmic X Zero defaults to sword-only; legacy buster may be restored for tests. */
+void MmxZeroSetSaberOnly(bool enabled);
+bool MmxZeroSaberOnly(void);
 void MmxZeroSetModern(bool enabled);
 bool MmxZeroModern(void);
 /* Physical DualSense R2 state, supplied once per host frame before game ticks. */
