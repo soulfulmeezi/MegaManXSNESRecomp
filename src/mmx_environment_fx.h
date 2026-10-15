@@ -88,4 +88,24 @@ static inline int MmxFxAtmospherePixel(uint16_t source,int x,int y,
   }
   return selected;
 }
+/* Intro Highway has a dark lavender city sky rather than blue daylight.
+ * Restrict atmospheric clouds to the same native color family as the
+ * established skyline renderer. Never paint roads or industrial panels. */
+static inline int MmxFxHighwaySky(uint16_t color) {
+  unsigned r=color&31u,g=(color>>5)&31u,b=(color>>10)&31u;
+  return r>=8 && r<=14 && g>=5 && g<=10 && b>=7 && b<=14 && r>g;
+}
+static inline int MmxFxHighwayCloudPixel(uint16_t source,int x,int y,
+                                         int camera_x,unsigned tick) {
+  if(y<16 || y>=102 || !MmxFxHighwaySky(source)) return -1;
+  int selected=-1;
+  for(unsigned plane=0;plane<2;++plane) {
+    int cover=MmxFxCloudCoverage(x,y,camera_x,tick,plane);
+    if(cover>0) {
+      uint16_t tint=plane==0 ? MmxFxRgb(18,14,20) : MmxFxRgb(18,15,19);
+      selected=(int)MmxFxLerpRgb(source,tint,(unsigned)cover);
+    }
+  }
+  return selected;
+}
 #endif /* MMX_ENVIRONMENT_FX_H */
