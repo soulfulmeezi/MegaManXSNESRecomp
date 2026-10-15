@@ -45,6 +45,8 @@ const uint8_t *MmxZeroTeleportPose(unsigned pose);
 int MmxZeroPoseOffsetY(const uint8_t ram[0x20000]);
 const uint8_t *MmxZeroPose(const uint8_t ram[0x20000], const MmxZeroState *snapshot);
 const uint8_t *MmxZeroBlade(const MmxZeroState *snapshot);
+/* RGB555 overlay color or -1 for transparent pixels. */
+int MmxZeroSaberVfxPixel(const MmxZeroState *snapshot, unsigned col, unsigned row);
 const uint16_t *MmxZeroColors(void);
 /* Per-pixel Jupiter cloud belts: called only while drawing Zero's armor. */
 uint16_t MmxZeroJupiterStripeColor(const uint8_t *pose,
