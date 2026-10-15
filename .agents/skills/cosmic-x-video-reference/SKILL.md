@@ -29,3 +29,9 @@ Pass observed ranges and uncertainties to cosmic-x-highway-traffic and motion/pr
 
 ## Safety
 Only inspect recordings actually supplied or authorized. No ROM/asset extraction, model installation, video redistribution or automatic addition of screenshot frames to public Git. State explicitly when no capture could be opened or no values were measured.
+
+
+## Combat powers extension — additional October 14 video
+When the uploaded footage emphasizes abilities rather than highway movement, additionally record actor identity (player/boss/unknown), effect shape and color, apparent charge buildup, attack direction, repeated shot count, movement state, visible contact feedback, slash trajectory, particle/flash duration and any uncertain arena transition. Distinguish direct visual evidence from unconfirmed input, damage, hitbox or attack ownership. The submitted combat clip is a 30fps-encoded montage, not an authoritative 60Hz runtime trace.
+
+Use [the combat-reference observation log](../../../docs/cosmic-x-combat-reference-2026-10-14.md) and hand off confirmed needs to cosmic-x-power-systems, cosmic-x-combat-mobility, cosmic-x-boss-patterns or cosmic-x-combat-vfx. Never hard-code attack timings from sparse cuts or use another game's exact art or weapon naming.

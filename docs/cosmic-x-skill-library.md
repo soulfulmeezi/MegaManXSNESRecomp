@@ -37,3 +37,17 @@ The other [Cosmic X research draft PR #3](https://github.com/soulfulmeezi/MegaMa
 This change intentionally consists exclusively of Markdown instruction files. No game code, scripts, assets, ROMs, submodules, pipeline configuration or dependencies are modified. No video was opened, no performance number was measured and no game build was run. All proposed acceptance tests still need explicit implementation and validation.
 
 The game repository is licensed under PolyForm Noncommercial 1.0.0; review commercialization and third-party IP separately. A tool license does not authorize copied proprietary game content. Future additions require exact version and license verification before installing or adapting any third-party skill/tool.
+
+
+## Powers and bosses: four more skills from the additional reference footage
+
+The supplied ~79.6-second 30fps gameplay montage was reviewed using individual frames and contact sheets; the [combat reference evidence log](cosmic-x-combat-reference-2026-10-14.md) lists scene timestamps, observations and unknowns.
+
+| Priority | Skill | Trigger | Expected result |
+| --- | --- | --- | --- |
+| P1 | [Power systems](../.agents/skills/cosmic-x-power-systems/SKILL.md) | Charged shots, projectile volleys, new attacks | Original power contract, energy/damage behavior and state-based tests |
+| P1 | [Combat mobility](../.agents/skills/cosmic-x-combat-mobility/SKILL.md) | Running, dashing, jumping and shooting together | Explicit character action-state transitions and timing tests |
+| P1 | [Boss patterns](../.agents/skills/cosmic-x-boss-patterns/SKILL.md) | Aerial enemies, sword moves, projectile fields, phase shifts | Fair telegraphed attacks, deterministic phase/encounter checks |
+| P2 | [Combat VFX](../.agents/skills/cosmic-x-combat-vfx/SKILL.md) | Lightning, fire, energy glow, slash trails, impact flashes | Original VFX with z-order, readability, accessibility and performance budgets |
+
+Suggested combat vertical slice after separate gameplay authorization: prototype one original regular/charged energy power and one synthetic training enemy with a readable, avoidable telegraph; add lightweight impact VFX, then profile the resulting frame pacing. Do not add exact attacks, code, or assets copied from the reference game.
