@@ -1508,12 +1508,16 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
   }
   int16_t crystal_ripple[224];MmxWeaponsTimeRipple(&frame_weapon_combat,crystal_ripple);
   CosmicLight lights[18];unsigned light_count=0;
-  /* Legacy traffic is explicitly opt-in. The debug-only build adds no cars. */
+  /* Reversible cinematic preview; per-feature env flags take priority.
+   * With showcase unset, ALL previous defaults remain identical. */
+  const int showcase=mmx_traffic_env_enabled("MMX_COSMIC_SHOWCASE",0);
   const int legacy_traffic=mmx_traffic_env_enabled("MMX_TRAFFIC_LEGACY",0);
-  const int debug_lanes=mmx_traffic_env_enabled("MMX_TRAFFIC_DEBUG_LANES",1);
-  const int near_cars=mmx_traffic_env_enabled("MMX_NEAR_ROAD_CARS",0);
-  const int upgrade_vfx=mmx_traffic_env_enabled("MMX_COSMIC_UPGRADE_VFX",0);
+  const int debug_lanes=mmx_traffic_env_enabled("MMX_TRAFFIC_DEBUG_LANES",showcase?0:1);
+  const int near_cars=mmx_traffic_env_enabled("MMX_NEAR_ROAD_CARS",showcase?1:0);
+  const int upgrade_vfx=mmx_traffic_env_enabled("MMX_COSMIC_UPGRADE_VFX",showcase?1:0);
   const int near_halo=mmx_traffic_env_enabled("MMX_NEAR_ROAD_HALO",0);
+  const int fast_road=mmx_traffic_env_enabled("MMX_COSMIC_TRAFFIC_FAST",showcase?1:0);
+  const int fast_sky=mmx_traffic_env_enabled("MMX_COSMIC_SKY_FAST",showcase?1:0);
   const int debug_telemetry=mmx_traffic_env_enabled("MMX_TRAFFIC_DEBUG_STATS",0);
   const int highway_scene=stage && frame.ram[0x1f7a]==0 && frame.ram[0xd3]==4;
   /* v33b: gate the lane ink by native Intro Highway camera X and phase.
@@ -1552,7 +1556,7 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
     int camera_x=view_camera(frame.ram,0x1e4d);
     for(unsigned lane=0;lane<MMX_NEAR_CAR_LANES;++lane)
       for(unsigned slot=0;slot<MMX_NEAR_CAR_SLOTS;++slot) {
-        MmxNearCar car=MmxNearCarAt(lane,slot,frame_weapon_combat.tick);
+        MmxNearCar car=MmxNearCarAt(lane,slot,frame_weapon_combat.tick*(fast_road?2u:1u));
         if(car.x>=camera_x-view.extra-MMX_NEAR_CAR_W_MAX &&
            car.x<camera_x+view.width-view.extra+MMX_NEAR_CAR_W_MAX)
           road_cars[road_car_count++]=car;
@@ -1873,7 +1877,7 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
             MmxCityActivityPixel(x+view_camera(frame.ram,0x1e4d)/8,y,
                 frame_weapon_combat.tick,base):
             mmx_city_ambience_without_traffic(x+view_camera(frame.ram,0x1e4d)/8,y,
-                frame_weapon_combat.tick,base);
+                frame_weapon_combat.tick*(fast_sky?2u:1u),base);
         if(activity>=0) bg_colors[1]=activity;
       }
       for(unsigned i=0;i<car_count;++i) {
@@ -1897,19 +1901,25 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
       /* v33i: exact native 8px-high Tier 1 sheet, no old v33h sedans.
        * Preserve BG1 tile/pillar/building occlusion. No curved C/D sprites. */
       if(road_car_count && bg[0] && !PPU_bigTiles((&p),0) && !(p.mosaic&1)) {
-        int road_x=x+MmxDisplay_ExpandStageScroll(
-            (uint16_t)word(frame.ram,0x1e4d),p.hScroll[0])+view_dx;
+        /* Tier 1 A/B cars paint only on BG1 world Y 464..479.
+         * Filtering before the car loop avoids scanning roadless pixels. */
         int road_y=y+1+crystal_ripple[y]+MmxDisplay_ExpandStageScroll(
             (uint16_t)word(frame.ram,0x1e50),p.vScroll[0])+view_dy;
-        for(unsigned i=0;i<road_car_count;++i) {
-          int pixel=MmxNearCarRoadPixel(&road_cars[i],road_x,road_y,
-                                       near_road_tile,bg[0]);
-          if(pixel>=0){bg_colors[0]=pixel;break;}
-          /* OFF by default; guard for later 1px halo evaluation. */
-          if(near_halo) {
-            pixel=MmxNearCarHaloPixel(&road_cars[i],road_x,road_y,
-                                      near_road_tile,bg[0]);
-            if(pixel>=0){bg_colors[0]=pixel;break;}
+        if(road_y>=464 && road_y<480) {
+          unsigned lane=(unsigned)(road_y>=472);
+          if(MmxNearRoadTile(lane,near_road_tile)) {
+            int road_x=x+MmxDisplay_ExpandStageScroll(
+                (uint16_t)word(frame.ram,0x1e4d),p.hScroll[0])+view_dx;
+            for(unsigned i=0;i<road_car_count;++i) {
+              const MmxNearCar *car=road_cars+i;
+              if(car->lane!=lane || !MmxNearCarMayDraw(car,road_x,road_y,near_halo)) continue;
+              int pixel=MmxNearCarRoadPixel(car,road_x,road_y,near_road_tile,bg[0]);
+              if(pixel>=0) {bg_colors[0]=pixel;break;}
+              if(near_halo) {
+                pixel=MmxNearCarHaloPixel(car,road_x,road_y,near_road_tile,bg[0]);
+                if(pixel>=0) {bg_colors[0]=pixel;break;}
+              }
+            }
           }
         }
       }

@@ -685,6 +685,17 @@ static inline MmxNearCar MmxNearCarAt(unsigned lane,unsigned slot,unsigned tick)
  c.x=MMX_NEAR_CAR_START+(int)(c.lane?MMX_NEAR_CAR_SPAN-1u-progress:progress);
  return c;
 }
+/* Sprite/halo rectangle to skip provably transparent samples.
+ * Never affects native road tiles, sprite priority or pixel data. */
+static inline int MmxNearCarMayDraw(const MmxNearCar *c,int wx,int wy,int halo) {
+  if(!c || c->lane>=MMX_NEAR_CAR_LANES || c->model>=MMX_NEAR_CAR_MODELS ||
+     c->palette>=MMX_NEAR_CAR_PALETTES || c->phase>=MMX_NEAR_CAR_FRAMES) return 0;
+  int width=MmxNearCarWidth(c->model),x0=c->x-width/2;
+  int extra=halo?1:0;
+  return wx>=x0-extra && wx<x0+width+extra &&
+         wy>=MmxNearCarLaneTop(c->lane) &&
+         wy<MmxNearCarLaneTop(c->lane)+MMX_NEAR_CAR_H;
+}
 /* Returns 0 transparent or 1..12 indexed color, preserving literal PNG data.
  * px/py are the absolute full BG1 world-space pixel coordinates. */
 static inline unsigned MmxNearCarIndex(const MmxNearCar *c,int wx,int wy) {
