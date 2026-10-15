@@ -20,4 +20,4 @@ jobs:
       - name: Compile shared desktop host and game adapters
         run: cmake --build build --target MegaManXSNESRecomp RockmanXSNESRecomp --parallel 4
       - name: Check ROM-free display, Zero, CPU companion and Cosmic core
-        run: cmake --build build --target mmx_display_test mmx_wide_policy_test mmx_renderer_test mmx_password_save_test mmx_zero_test mmx_cpu_antistuck_test mmx_cpu_deep_descent_test mmx_cpu_jump_learning_test mmx_future_zero_test mmx_cosmic_core_test && ctest --test-dir build --output-on-failure
+        run: cmake --build build --target mmx_display_test mmx_wide_policy_test mmx_renderer_test mmx_password_save_test mmx_zero_test mmx_cpu_antistuck_test mmx_cpu_deep_descent_test mmx_cpu_jump_learning_test mmx_future_zero_test mmx_cosmic_core_test mmx_cosmic_legacy_bridge_test && ctest --test-dir build --output-on-failure
