@@ -195,6 +195,8 @@ static void saber_only_visual_checks(void) {
   s=MmxZeroGetState();
   assert((MmxZeroPose(ram,&s)-MmxZeroMenuPose())/16384==119);
   assert((MmxZeroBlade(&s)-MmxZeroMenuPose())/16384==138);
+  assert(MmxZeroSaberVfxPixel(&s,84,60)>=0);
+  assert(MmxZeroSaberVfxPixel(&s,64,60)<0);
   for(unsigned i=0;i<50;++i) tick(64,0);
   tick(0,0);
   assert(!MmxZeroGetState().charge && !MmxZeroGetState().burst);
@@ -207,6 +209,7 @@ static void saber_only_visual_checks(void) {
   assert(s.air && !(s.modern.reserved&2));
   assert((MmxZeroPose(ram,&s)-MmxZeroMenuPose())/16384==128);
   assert((MmxZeroBlade(&s)-MmxZeroMenuPose())/16384==148);
+  assert(MmxZeroSaberVfxPixel(&s,89,60)>=0);
 
   MmxZeroResetState(); player();
   ram[0xbd3]=0; ram[0xbaa]=8;
@@ -216,6 +219,7 @@ static void saber_only_visual_checks(void) {
   assert(s.air && (s.modern.reserved&2));
   assert((MmxZeroPose(ram,&s)-MmxZeroMenuPose())/16384==129);
   assert((MmxZeroBlade(&s)-MmxZeroMenuPose())/16384==151);
+  assert(MmxZeroSaberVfxPixel(&s,79,80)>=0);
   assert(MmxZeroValidState(&s));
   MmxZeroSetSaberOnly(false); MmxZeroResetState(); player();
 }
