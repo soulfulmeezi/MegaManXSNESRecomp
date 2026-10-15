@@ -1,6 +1,7 @@
 #include "mmx_feedback_audio.h"
 #include "mod_audio.h"
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 enum { RATE=22050, SWING=3308, LAND=2646 };
@@ -33,7 +34,7 @@ static void register_clips(void) {
       int envelope=(int)((uint64_t)(n-i)*(n-i)*1024u/((uint64_t)n*n));
       /* Short attack avoids a click; all amplitudes have mixer headroom. */
       if(i<64)envelope=envelope*(int)i/64;
-      int value=kind?triangle/5+low/4:(raw-low)/5+triangle/12;
+      int value=kind?triangle/5+low/4:(raw-low)/3+triangle/7;
       pcm[i]=(int16_t)(value*envelope/1024);
     }
     SNESModAudioClip clip=snes_mod_audio_register_pcm_s16(pcm,n,RATE,1);
@@ -69,8 +70,11 @@ void MmxFeedbackAudioFrame(const MmxFeedbackActor actors[2],
         (prev.slash<7 || now.combo!=prev.combo || now.slash<prev.slash);
       if(new_swing) {
         snes_mod_audio_stop_voice(voices[a][0]);
-        voices[a][0]=snes_mod_audio_play_voice(swing,75);
+        voices[a][0]=snes_mod_audio_play_voice(swing,100);
         snes_mod_audio_set_voice_pitch(voices[a][0],1024+(int)now.combo*90);
+        if(getenv("MMX_AUDIO_TRACE"))
+          fprintf(stderr,"Cosmic X swing: actor=%u frame=%u clip=%d voice=%d\n",
+              a,frame,swing,voices[a][0]);
       }
       if(!now.grounded) {
         if(l->airborne<255)l->airborne++;

@@ -1,8 +1,17 @@
 #include "mmx_environment_fx.h"
+#include "mmx_orbital_background.h"
 #include <assert.h>
 #include <stdio.h>
 
 int main(void) {
+  unsigned orbital_motion=0, orbital_parallax=0;
+  for(int y=0;y<224;y++)for(int x=-512;x<768;x++) {
+    int a=MmxOrbitalBackgroundPixel(x,y,0,0);
+    assert(a>=0 && a<=0x7fff);
+    orbital_motion+=a!=MmxOrbitalBackgroundPixel(x,y,0,240);
+    orbital_parallax+=a!=MmxOrbitalBackgroundPixel(x,y,320,0);
+  }
+  assert(orbital_motion>20 && orbital_parallax>10000);
   uint16_t sky=MmxFxRgb(10,19,27);
   assert(!MmxFxBlueSky(MmxFxRgb(8,9,9)));
   assert(!MmxFxBlueSky(MmxFxRgb(2,5,12)));

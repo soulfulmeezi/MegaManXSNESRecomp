@@ -96,3 +96,35 @@ Test Zero misses/hits, three-hit combos, aerial down slash, landing while
 attacking, pause/resume and save/load. Hold normal fire while Earth Wave is
 active, then verify it resumes after the wave ends. Keep a matched recording
 of baseline and candidate; inspect frame-time spikes with effects overlapping.
+
+
+## Jupiter Skyline r2
+
+The highway travel section now uses an original procedural BG2 scene: a large
+banded Jupiter, star field, violet nebula, two parallax city depths and a moving
+shuttle. Native foreground terrain, sprites and HUD retain their priority.
+The airship/final arena and windowed dialogue retain native backgrounds.
+`MMX_ORBITAL_BACKGROUND=0` restores the earlier backdrop.
+Earth X and Jupiter Zero armor identities remain intact.
+
+Swing synthesis now has more noise/body and 100% voice gain (previously 75%).
+`MMX_AUDIO_TRACE=1` prints actor/frame/clip/voice for each triggered swing.
+`MMX_ZERO_SFX=0` still mutes these cues; online custom audio remains disabled.
+The window title includes **Jupiter Skyline r2** to identify the executable.
+
+Validation: renderer regression suite, environment tests, feedback tests, and
+USA main syntax check passed. A harness linked against the real pinned PCM
+mixer produced a swing peak of 11364/32767. This verifies generated PCM and
+mixer delivery, not the user's Windows device or music balance. Full Windows
+build/gameplay listening remains unverified; no confirmed cause for the
+recording's missing swing audio has been established.
+
+Update the existing evolution checkout from MSYS2 MinGW64:
+
+```bash
+cd ~/CosmicX_Evolution
+git pull --ff-only origin upgrade/cosmic-x-reference-evolution-20261015
+bash tools/build_cosmic_evolution.sh ~/CosmicFX_Test
+cd build-evolution
+MMX_ZERO_SFX=1 MMX_AUDIO_TRACE=1 ./MegaManXSNESRecomp.exe
+```

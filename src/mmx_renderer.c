@@ -14,6 +14,7 @@ static bool armor_finish_enabled=true;
 #include "mmx_cosmic_upgrade_vfx.h"
 #include "mmx_cosmic_sky.h"
 #include "mmx_environment_fx.h"
+#include "mmx_orbital_background.h"
 #include "mmx_weapon_fx.h"
 #include "mmx_movement_fx.h"
 #include "mmx_hover_traffic.h"
@@ -1546,6 +1547,10 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
    * Opt out via MMX_CLOUD_FX=0; leave original v33 gameplay untouched. */
   const int cloud_fx=stage && !palette_fade && !swapping &&
       frame.ram[0xd3]==4 && mmx_traffic_env_enabled("MMX_CLOUD_FX",1);
+  const int orbital_background=stage && !palette_fade && !swapping &&
+      frame.ram[0x1f7a]==0 && frame.ram[0xd3]==4 &&
+      word(frame.ram,0x1e8d)<0xa00 && frame.ram[0x1e89]!=0x0c &&
+      mmx_traffic_env_enabled("MMX_ORBITAL_BACKGROUND",1);
   armor_finish_enabled=mmx_traffic_env_enabled("MMX_ARMOR_FINISH",1);
   const int movement_fx=stage && !palette_fade && !swapping &&
       mmx_traffic_env_enabled("MMX_MOVEMENT_FX",1);
@@ -1942,6 +1947,9 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
                 view_camera(frame.ram,0x1e4d),frame_weapon_combat.tick);
         if(sky>=0)bg_colors[1]=sky;
       }
+      if(orbital_background && !p.windowsel && bg[1])
+        bg_colors[1]=MmxOrbitalBackgroundPixel(x,y,
+            view_camera(frame.ram,0x1e4d),frame_weapon_combat.tick);
       for(unsigned i=0;i<car_count;++i) {
         const LowerCar *car=cars+i;unsigned layer=0;
         int pixel=MmxHoverPixel(car,x-car->x,y-car->y);
