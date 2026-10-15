@@ -18,8 +18,9 @@ The existing native PPU/host RGB555 renderer already has composition layers. Thi
 2. Mid-range cloudbanks follow camera x / 6 and drift at 1 px per 11 ticks.
 3. Larger, close clouds follow camera x / 3 and drift at 1 px per 7 ticks.
 4. Cloud masses consist of overlapping ellipse lobes; blend with the native BG2 sky color.
-5. Only eligible bright blue BG2 sky pixels with no BG1 foreground are modified. Mechanics, enemies, player sprites, HUD, palette fades, PPU priorities, windows, saves and netplay protocol are untouched.
-6. Cosmetic time uses existing saved `frame_weapon_combat.tick`; no wall-clock time, thread or RNG.
+5. The Intro Highway uses a distinct **dark-night cloud profile** with the existing city's lavender sky palette, so the first stage receives visible motion as well. Only the original skyline blue/purple color ranges qualify.
+6. Only eligible bright blue/night-sky BG2 sky pixels with no BG1 foreground are modified. Mechanics, enemies, player sprites, HUD, palette fades, PPU priorities, windows, saves and netplay protocol are untouched.
+7. Cosmetic time uses existing saved `frame_weapon_combat.tick`; no wall-clock time, thread or RNG.
 7. Set `MMX_CLOUD_FX=0` in the environment to disable effects while A/B testing.
 
 ## Verification before preview release
@@ -29,6 +30,8 @@ The existing native PPU/host RGB555 renderer already has composition layers. Thi
 - In a stage with visibly bright blue sky, capture moving/fixed-camera frames at 0, 60, 120 ticks, measure cloud displacement independently from BG1 structures.
 - Check title/menu, underground/dark scenes, fades, splitscreen, multiplayer, camera margins and frames with multiple enemies.
 - Profile native resolution, wide modes and 60-FPS host presentation.
+
+The separate \`MMX_WEAPON_FX=0\` environment setting disables additional Earth-wave wake sparks and Jupiter electrical halos while leaving the original projectile sprite intact.
 
 ## Remaining work
 
