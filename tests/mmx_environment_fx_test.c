@@ -2,8 +2,17 @@
 #include "mmx_orbital_background.h"
 #include <assert.h>
 #include <stdio.h>
+#include <string.h>
 
 int main(void) {
+  for(unsigned m=0;m<20;m++) {
+    for(unsigned n=0;n<m;n++)assert(memcmp(mmx_fleet[m],mmx_fleet[n],sizeof(mmx_fleet[m])));
+    for(unsigned y=0;y<9;y++) {
+      assert(strlen(mmx_fleet[m][y])==20);
+      for(unsigned x=0;x<20;x++)assert(mmx_fleet[m][y][x]>='0' && mmx_fleet[m][y][x]<='7');
+    }
+  }
+
   unsigned orbital_motion=0, orbital_parallax=0;
   for(int y=0;y<224;y++)for(int x=-512;x<768;x++) {
     int a=MmxOrbitalBackgroundPixel(x,y,0,0);

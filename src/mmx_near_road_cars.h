@@ -43,7 +43,7 @@ static inline int MmxNearCarWidth(unsigned model) {
 }
 static inline int MmxNearCarLaneTop(unsigned lane) {return lane?472:464;}
 /* Deterministic lane-relative world motion: upper A => +X; lower B => -X.
- * A speeds 0.5 or 0.333 px/frame; B speeds 0.333 or 0.25 px/frame.
+ * A speeds 2 or 1.333 px/frame; B speeds 1.333 or 1 px/frame.
  * Anchor and mask always use full world coordinates independent of camera. */
 static inline MmxNearCar MmxNearCarAt(unsigned lane,unsigned slot,unsigned tick) {
  MmxNearCar c;
@@ -53,7 +53,7 @@ static inline MmxNearCar MmxNearCarAt(unsigned lane,unsigned slot,unsigned tick)
  c.phase=(tick/5+slot+2*c.lane)%MMX_NEAR_CAR_FRAMES;
  unsigned seed=(slot%MMX_NEAR_CAR_SLOTS)*MMX_NEAR_CAR_SPAN/MMX_NEAR_CAR_SLOTS;
  unsigned divisor=(c.lane?3u:2u)+((slot+c.lane)&1u);
- unsigned progress=(seed+64+tick/divisor)%MMX_NEAR_CAR_SPAN;
+ unsigned progress=(seed+64+(tick*4)/divisor)%MMX_NEAR_CAR_SPAN;
  c.x=MMX_NEAR_CAR_START+(int)(c.lane?MMX_NEAR_CAR_SPAN-1u-progress:progress);
  return c;
 }

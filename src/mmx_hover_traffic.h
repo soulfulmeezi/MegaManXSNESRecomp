@@ -45,7 +45,7 @@ typedef struct MmxHoverCar { int x,y; unsigned depth,model,direction,phase,state
 static inline MmxHoverCar MmxHoverPosition(unsigned lane,unsigned slot,unsigned tick) {
   MmxHoverLane lane_path=MmxHoverLaneAt(lane);
   const MmxHoverLane *p=&lane_path;
-  unsigned t=(tick*2+lane*137+slot*(MMX_HOVER_CYCLE/MMX_HOVER_PER_LANE))%MMX_HOVER_CYCLE;
+  unsigned t=(tick*12+lane*137+slot*(MMX_HOVER_CYCLE/MMX_HOVER_PER_LANE))%MMX_HOVER_CYCLE;
   MmxHoverCar c;
   c.x=p->fx+(p->nx-p->fx)*(int)t/MMX_HOVER_CYCLE;
   c.y=p->fy+(p->ny-p->fy)*(int)t/MMX_HOVER_CYCLE;

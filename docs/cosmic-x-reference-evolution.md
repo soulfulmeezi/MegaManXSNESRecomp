@@ -160,3 +160,28 @@ Renderer/environment tests passed; synthetic backdrop preview inspected.
 Windows performance, stage-start footage and cinematic pacing need runtime
 review. No new 60fps claim. Earlier clips informed foreground readability and
 small background scale; the EXE scene observations informed depth separation.
+
+### Dense battle and perspective-road traffic pass
+
+Reviewed the supplied 15.67-second racing clip at 0, 0.25, 0.5, 1, 3, 6, 10
+and 14 seconds. Its important cues are depth-scaled vehicles, converging lanes
+and rapidly moving ground. These are qualitative observations, not calibrated
+side-scroller speed measurements.
+
+Added 15 original hull designs (20 total), cycling through four pursuit pairs,
+with eight active ships maximum. Authored speed is 3 native pixels/tick. Bursts
+close a 100-pixel separation; damaged targets trail smoke, descend, explode and
+shed falling fragments. Explosion positions stop moving with the pursuing ship.
+This replaces the earlier camera-band vignettes with repeating skirmishes;
+a complete authored stage narrative remains unfinished.
+
+Flat-road cars run at four times their previous speed. Existing perspective
+ramp traffic runs at six times its former speed and is enabled independently
+with MMX_RAMP_TRAFFIC=1 (set to 0 to disable). It retains the existing measured
+reference corridors, experimental repeated placements, perspective scale and
+native road-material mask. Newly enabled placements need gameplay review;
+this does not assert every ramp or curved road is mapped correctly.
+
+Renderer/environment tests and sprite uniqueness/dimension checks passed.
+Twenty-ship contact sheet inspected. Full Windows performance and road contact
+remain unverified. This is an experimental pass, not the approved 8/10 baseline.

@@ -1591,7 +1591,7 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
     fprintf(stderr,"v33f native frame camera %04X: %s; tile CSV: %s\n",
         capture_camera,saved?"SAVED":"FAILED",capture_tiles?"OPEN":"FAILED");
   }
-  LowerCar cars[MMX_HOVER_MAX_VISIBLE];unsigned car_count=legacy_traffic &&
+  LowerCar cars[MMX_HOVER_MAX_VISIBLE];unsigned car_count=mmx_traffic_env_enabled("MMX_RAMP_TRAFFIC",1) &&
       highway_scene && MmxZeroEnabled() ?
       lower_traffic(cars,view,frame_weapon_combat.tick):0;
   /* World-space car anchors are calculated once per output frame, not once
