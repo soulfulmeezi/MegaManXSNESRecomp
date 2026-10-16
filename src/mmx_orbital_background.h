@@ -10,10 +10,6 @@ static inline int MmxOrbitalBackgroundPixel(int x,int y,int camera,unsigned tick
   unsigned cell=MmxOrbitHash((unsigned)(far/24)*71u+(unsigned)(sy/20)*977u);
   if((unsigned)(far%24)==cell%24 && (unsigned)(sy%20)==(cell>>8)%20)
     color=MmxOrbitRGB(18,22,28);
-  /* Broad, dithered violet nebula, deliberately slower than city parallax. */
-  int ribbon=48+((far/6)%37);
-  if(sy>ribbon && sy<ribbon+24 && ((far+sy)&3)==0)
-    color=MmxOrbitRGB(8,5,15);
   int px=(far%512+512)%512-188,py=sy-72;
   int radius=px*px+py*py;
   if(radius<65*65) {

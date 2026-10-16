@@ -101,7 +101,7 @@ of baseline and candidate; inspect frame-time spikes with effects overlapping.
 ## Jupiter Skyline r2
 
 The highway travel section now uses an original procedural BG2 scene: a large
-banded Jupiter, star field, violet nebula, two parallax city depths and a moving
+banded Jupiter, star field, two parallax city depths and a moving
 shuttle. Native foreground terrain, sprites and HUD retain their priority.
 The airship/final arena and windowed dialogue retain native backgrounds.
 `MMX_ORBITAL_BACKGROUND=0` restores the earlier backdrop.
@@ -128,3 +128,10 @@ bash tools/build_cosmic_evolution.sh ~/CosmicFX_Test
 cd build-evolution
 MMX_ZERO_SFX=1 MMX_AUDIO_TRACE=1 ./MegaManXSNESRecomp.exe
 ```
+
+### Follow-up visual fixes
+
+Removed the diagonal purple nebula hatching after gameplay review. The orbital
+background now stays present through all six character-swap phases; palette
+fades use the common compositor instead of revealing the original background.
+Renderer regression tests cover swap continuity with synthetic Zero assets.
