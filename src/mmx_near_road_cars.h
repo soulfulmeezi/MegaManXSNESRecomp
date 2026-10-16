@@ -57,13 +57,19 @@ static inline MmxNearCar MmxNearCarAt(unsigned lane,unsigned slot,unsigned tick)
  c.x=MMX_NEAR_CAR_START+(int)progress;
  return c;
 }
+/* Follow the authored descending connector beyond the viewport. */
+static inline int MmxNearCarTopAt(const MmxNearCar *c) {
+ int bend=MmxNearRoadY(c->lane+2,c->x);
+ int baseline=(c->lane&1)?477:468;
+ return MmxNearCarLaneTop(c->lane)+(bend>=0?bend-baseline:0);
+}
 /* Returns 0 transparent or 1..12 indexed color.
  * px/py are the absolute full BG1 world-space pixel coordinates. */
 static inline unsigned MmxNearCarIndex(const MmxNearCar *c,int wx,int wy) {
  if(c->model>=MMX_NEAR_CAR_MODELS || c->lane>=MMX_NEAR_CAR_LANES ||
     c->palette>=MMX_NEAR_CAR_PALETTES || c->phase>=MMX_NEAR_CAR_FRAMES)return 0;
  int width=MmxNearCarWidth(c->model);
- int ix=wx-(c->x-width/2),iy=wy-MmxNearCarLaneTop(c->lane);
+ int ix=wx-(c->x-width/2),iy=wy-MmxNearCarTopAt(c);
  if(ix<0 || ix>=width || iy<0 || iy>=MMX_NEAR_CAR_H)return 0;
  /* Both horizontal road lanes face right. */
  char symbol=mmx_road_detail[c->model][iy][ix];
@@ -80,14 +86,15 @@ static inline int MmxNearCarColor(const MmxNearCar *c,int wx,int wy) {
  if(pixel==12)return 0x56b5; /* bright metal */
  return pixel?mmx_tier1_palette_rgb555[c->palette][pixel]:-1;
 }
-/* Preserve v33h native BG1 per-pixel occlusion. Extra Y clamp ensures that
- * no sprite paint escapes lane A 464..471 or B 472..479 on road-edge pixels.
- * All 8px-high sprite cells fit; no 18px transport in this build. */
+/* Preserve native BG1 per-pixel occlusion. Eight-pixel cells follow the
+ * authored connector elevation; supports and unrelated tiles stay masked. */
 static inline int MmxNearCarRoadPixel(const MmxNearCar *c,int wx,int wy,
                                      uint16_t native_tile,unsigned native_bg1_pixel){
- if(c->lane>=MMX_NEAR_CAR_LANES || wy<MmxNearCarLaneTop(c->lane) ||
-    wy>=MmxNearCarLaneTop(c->lane)+MMX_NEAR_CAR_H ||
-    !native_bg1_pixel || !MmxNearRoadTile(c->lane,native_tile))return -1;
+ if(c->lane>=MMX_NEAR_CAR_LANES || wy<MmxNearCarTopAt(c) ||
+    wy>=MmxNearCarTopAt(c)+MMX_NEAR_CAR_H ||
+    !native_bg1_pixel ||
+    !(MmxNearRoadTile(c->lane,native_tile) ||
+      (MmxNearRoadY(c->lane+2,c->x)>=0 && MmxNearRoadTile(c->lane+2,native_tile))))return -1;
  return MmxNearCarColor(c,wx,wy);
 }
 /* Wheeled traffic has no thruster halo. Keep the renderer interface inert. */

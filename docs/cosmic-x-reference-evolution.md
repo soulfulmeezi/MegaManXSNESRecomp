@@ -201,3 +201,12 @@ Renderer tests cover road color separation, eight-ramp scope, opening traffic,
 rightward motion in both lanes, and pillar rejection. Existing renderer suite
 passes. Curved red-line alignment and any other road tile families still need
 native captures/gameplay verification; screenshots do not prove world geometry.
+
+### Flat-road bend exits
+
+Side-view traffic now uses the existing authored bend heights at world X
+0x688 and 0x1088 and accepts their curve tile IDs. Previously the fixed Y
+anchor and straight-only tile mask erased cars at connectors. Regression
+checks cover continuous descent, curve visibility and an endpoint below the
+224px viewport at camera Y=256. Renderer tests pass; the marked screenshot
+still needs runtime comparison to confirm it matches these authored bends.

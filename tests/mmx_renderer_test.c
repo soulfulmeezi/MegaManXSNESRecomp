@@ -1578,6 +1578,18 @@ static void weapons_menu_margins(void) {
 
 static void traffic_road_types(void) {
  assert(MMX_HOVER_LANES==8);
+ for(unsigned lane=0;lane<2;lane++) {
+  MmxNearCar car={0x688,lane,0,0,0};
+  int previous=MmxNearCarTopAt(&car);
+  for(int x=0x688;x<=0x6c7;x++) {
+   car.x=x;int top=MmxNearCarTopAt(&car);
+   assert(top>=previous && top-previous<=1);previous=top;
+  }
+  assert(MmxNearCarTopAt(&car)>256+224+MMX_NEAR_CAR_H);
+  car.x=0x688;
+  assert(MmxNearCarRoadPixel(&car,car.x,MmxNearCarTopAt(&car)+4,0x1179,1)>=0);
+ }
+
  assert(MmxPerspectiveRoadColor(4|(10<<5)|(7<<10)));
  assert(!MmxPerspectiveRoadColor(5|(9<<5)|(12<<10)));
  for(unsigned lane=0;lane<2;lane++) {
