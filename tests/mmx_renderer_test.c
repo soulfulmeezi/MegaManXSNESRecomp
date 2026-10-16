@@ -4,8 +4,10 @@
 #include "mmx_zero.h"
 #include "mmx_weapon_combat.h"
 #include "mmx_cosmic.h"
+#include "mmx_cosmic_sky.h"
 #include "mmx_traffic_telemetry.h"
 #include "mmx_hover_traffic.h"
+#include "mmx_near_road_cars.h"
 #include "mmx_knc_bugfix.h"
 #include <assert.h>
 #include <math.h>
@@ -1227,7 +1229,14 @@ static void cosmic_combat(void) {
   MmxWeaponCombatState saved=MmxWeaponsGetCombatState();
   assert(saved.shots[0].page==MMX_COSMIC_PAGE && saved.shots[0].weapon==MMX_EARTH_WAVE);
   assert(saved.shots[0].x==118*256 && saved.shots[0].y==102*256);
-  assert(MmxWeaponsValidCombatState(&saved) && !(ram[0xbe3]&64));
+  assert(MmxWeaponsValidCombatState(&saved) && !(ram[0xbe3]&64) && !(ram[0xbdf]&64));
+  /* Releasing R2 or pressing Shoot during the active wave must never
+   * produce X1 buster input. The original movement buttons remain live. */
+  MmxZeroSetCosmicTrigger(false);
+  ram[0xbdf]=0x44;ram[0xbe3]=0x44;MmxWeaponsPlayerTick(ram);
+  assert(!(ram[0xbe3]&64) && !(ram[0xbdf]&64));
+  assert((ram[0xbe3]&4) && (ram[0xbdf]&4));
+  MmxZeroSetCosmicTrigger(true);
   MmxWeaponsSetCombatState(saved);
   MmxWeaponCombatState restored=MmxWeaponsGetCombatState();assert(!memcmp(&saved,&restored,sizeof(saved)));
   ram[0xbe3]=0;MmxWeaponsPlayerTick(ram);MmxWeaponsProjectileTick(ram,0x1228,1);
@@ -1236,10 +1245,15 @@ static void cosmic_combat(void) {
   assert(MmxWeaponsFinalDamage(ram,0xe68,0x1228,3)==0); /* One hit per victim. */
   put_word(0x20ee,1);MmxWeaponsPlayerTick(ram);MmxWeaponsProjectileTick(ram,0x1228,1);
   assert(!ram[0x1228]); /* A gap retires the ground wave. */
+  /* With the wave gone, ordinary Shoot works again without R2. */
+  MmxZeroSetCosmicTrigger(false);
+  ram[0xbdf]=ram[0xbe3]=64;MmxWeaponsPlayerTick(ram);
+  assert(ram[0xbe3]&64);
+  MmxZeroSetCosmicTrigger(true);
   put_word(0x20ee,0);
   for(unsigned i=0;i<3;++i) {ram[0xbdf]=64;ram[0xbe3]=64;MmxWeaponsPlayerTick(ram);}
   saved=MmxWeaponsGetCombatState();assert(saved.shots[0].active && saved.shots[1].active && !saved.shots[2].active);
-  assert(ram[0xbe3]&64); /* Full pool falls back to the normal weapon. */
+  assert(!(ram[0xbe3]&64) && !(ram[0xbdf]&64)); /* Full pool cannot fire X-Buster during Earth Wave. */
   ++ram[0x1f7a];ram[0xbe3]=0;MmxWeaponsPlayerTick(ram);assert(!ram[0x1228] && !ram[0x1268]);
   MmxZeroSetCosmicTrigger(false);
   MmxZeroSetStartCharacter(false);MmxZeroResetState();
@@ -1255,6 +1269,17 @@ static void cosmic_combat(void) {
     assert(MmxEarthDamageBoost(c,0,0xe68,0x1228)==c);
     assert(MmxEarthDamageBoost(c,1,0xba8,0x1228)==c);
   }
+  /* Synthetic palette-only sky coverage and deterministic wind motion. */
+  assert(MmxCosmicSkyImpactPixel(20,10,0,MmxCosmicRgb(10,7,10))<0);
+  assert(MmxCosmicSkyImpactPixel(20,40,0,MmxCosmicRgb(2,3,5))<0);
+  unsigned gust_pixels=0,gust_movement=0;
+  for(int yy=16;yy<100;++yy)for(int xx=0;xx<256;++xx) {
+    int before=MmxCosmicSkyImpactPixel(xx,yy,0,MmxCosmicRgb(10,7,10));
+    int after=MmxCosmicSkyImpactPixel(xx,yy,12,MmxCosmicRgb(10,7,10));
+    gust_pixels+=(before>=0);
+    gust_movement+=(before!=after);
+  }
+  assert(gust_pixels>200 && gust_movement>200);
   unsigned clouds=0,traffic=0,windows=0,motion=0,lower_street=0;
   for(int y=0;y<224;++y) for(int x=0;x<256;++x) {
     uint16_t sky=MmxCosmicRgb(10,7,10);
@@ -1450,6 +1475,7 @@ static void cosmic_combat(void) {
   assert(MmxCosmicShotPixel(MMX_JUPITER_STORM,1,0,20)<0);
   MmxWeaponsCancelShots(ram);MmxWeaponsSetCombatState((MmxWeaponCombatState){0});
 }
+static void orbital_swap_continuity(void);
 static void zero_blink_submission(void) {
   /* A submitted body belongs to the OAM epoch even if the next player update
    * has already cleared its visibility flag. It must never turn back into X. */
@@ -1504,8 +1530,31 @@ static void zero_blink_submission(void) {
   assert(MmxRendererDraw(output,view,false) && output[40 * 256 + 40] == 0);
   earth_x_surface_coordinates();
   cosmic_combat();
+  orbital_swap_continuity();
   MmxZeroDisable(); g_mmx_custom_renderer = false; g_mmx_render_asset_repairs = true;
   MmxRendererReset();
+}
+static void orbital_swap_continuity(void) {
+  assert(MmxZeroEnabled()); /* Synthetic assets loaded by zero_blink_submission. */
+  memset(&ppu,0,sizeof(ppu)); memset(ram,0,sizeof(ram));
+  MmxRendererReset(); MmxRendererSetRom(NULL,0);
+  ram[0xd1]=2; ram[0xd2]=ram[0xd3]=4;
+  ppu.inidisp=15; ppu.bgmode=1; ppu.screenEnabled[0]=2;
+  ppu.bgXsc[1]=8; ppu.cgram[1]=31;
+  for(int i=0;i<1024;i++)ppu.vram[0x800+i]=1;
+  for(int y=0;y<8;y++)ppu.vram[16+y]=255;
+  MmxRenderView v=MmxRendererViewport(MMX_ASPECT_ADAPTIVE,0,0,kSnesDisplayAspect_Crt4x3);
+  MmxZeroState saved=MmxZeroGetState(),state={0};
+  uint32_t expected=0;
+  for(unsigned phase=0;phase<=6;phase++) {
+    ram[0xd3]=phase<3?phase*2:4;
+    state.swap_phase=phase; MmxZeroSetState(state);
+    capture(); assert(MmxRendererDraw(output,v,false));
+    uint32_t pixel=output[40*v.width+v.extra+100];
+    if(!phase){expected=pixel;assert(expected!=0xff0000);}
+    else assert(pixel==expected);
+  }
+  MmxZeroSetState(saved);
 }
 static void weapons_menu_margins(void) {
   memset(&ppu, 0, sizeof(ppu)); memset(ram, 0, sizeof(ram));
@@ -1527,4 +1576,26 @@ static void weapons_menu_margins(void) {
   memset(stock, 0, sizeof(stock));
 }
 
-int main(void) { near_road_cases(); geometry(); raster_and_hud(); sprite_coordinates(); expanded_capacity(); background_resources(); dialogue_and_password(); highway_arena_sky(); highway_airship_binding(); distant_doors(); storm_background_prefill(); resource_decode(); spark_effects(); airport_panorama_edge(); wide_water_plane(); buried_submarine(); background_continuations(); launch_background_palettes(); sting_background_palettes(); mammoth_background_palettes(); dialogue_backdrop(); fortress_actor_presentation(); sprite_priority_and_cutscene_binding(); weapons_menu_margins(); zero_blink_submission(); return 0; }
+static void traffic_road_types(void) {
+ assert(MMX_HOVER_LANES==8);
+ for(unsigned lane=0;lane<2;lane++) {
+  MmxNearCar car={0x688,lane,0,0,0};
+  int previous=MmxNearCarTopAt(&car);
+  for(int x=0x688;x<=0x6c7;x++) {
+   car.x=x;int top=MmxNearCarTopAt(&car);
+   assert(top>=previous && top-previous<=1);previous=top;
+  }
+  assert(MmxNearCarTopAt(&car)>256+224+MMX_NEAR_CAR_H);
+  car.x=0x688;
+  assert(MmxNearCarRoadPixel(&car,car.x,MmxNearCarTopAt(&car)+4,0x1179,1)>=0);
+ }
+
+ assert(MmxPerspectiveRoadColor(4|(10<<5)|(7<<10)));
+ assert(!MmxPerspectiveRoadColor(5|(9<<5)|(12<<10)));
+ for(unsigned lane=0;lane<2;lane++) {
+  MmxNearCar a=MmxNearCarAt(lane,0,0),b=MmxNearCarAt(lane,0,8);
+  assert(a.x<0x500 && b.x>a.x);
+  assert(MmxNearCarRoadPixel(&a,a.x,MmxNearCarLaneTop(lane)+4,0x0898,1)==-1);
+ }
+}
+int main(void) { traffic_road_types(); near_road_cases(); geometry(); raster_and_hud(); sprite_coordinates(); expanded_capacity(); background_resources(); dialogue_and_password(); highway_arena_sky(); highway_airship_binding(); distant_doors(); storm_background_prefill(); resource_decode(); spark_effects(); airport_panorama_edge(); wide_water_plane(); buried_submarine(); background_continuations(); launch_background_palettes(); sting_background_palettes(); mammoth_background_palettes(); dialogue_backdrop(); fortress_actor_presentation(); sprite_priority_and_cutscene_binding(); weapons_menu_margins(); zero_blink_submission(); return 0; }

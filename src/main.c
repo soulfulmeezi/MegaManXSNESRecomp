@@ -12,6 +12,7 @@
 #include "mmx_display.h"
 #include "mmx_renderer.h"
 #include "mmx_zero.h"
+#include "mmx_feedback_audio.h"
 #include "mmx_knc_bugfix.h"
 #include "mmx_weapon_combat.h"
 #include "mmx_weapons.h"
@@ -87,6 +88,7 @@ static void MmxBeforeFrame(void) {
   if (g_mmx_custom_renderer) MmxRendererLatchSprites();
 }
 static void MmxResetRenderer(void) {
+  MmxFeedbackAudioReset();
   MmxKncBugfixReset();
   MmxRendererReset();
   s_render_valid = false;
@@ -173,7 +175,33 @@ static void MmxAfterConfig(void) {
     g_config.output_method = kOutputMethod_SDL;
   }
 }
+static MmxFeedbackActor MmxAudioActor(const uint8_t *body, MmxZeroState zero, bool active) {
+  unsigned action=body[2];
+  bool playable=body[1]==2 && (body[0x27]&127) && !zero.swap_phase &&
+      (action<=0x0a || action==0x10 || action==0x12 || action==0x14 || action==0x20);
+  return (MmxFeedbackActor){zero.slash,
+      (int16_t)(body[5]|body[6]<<8),(int16_t)(body[8]|body[9]<<8),
+      zero.combo,active && playable,(body[0x2b]&4)!=0};
+}
+static void MmxUpdateFeedback(const SnesDesktopHostFrameStats *stats) {
+  MmxFeedbackActor actors[2]={{0}};
+  MmxCoopState coop=MmxCoopGetState();
+  if(MmxCoopEnabled() && coop.initialized) {
+    for(unsigned i=0;i<2;i++) {
+      const MmxCoopPlayer *p=&coop.players[i];
+      actors[i]=MmxAudioActor(i==coop.current?g_ram+0xba8:p->body,
+          i==coop.current?MmxZeroGetState():p->zero,
+          p->character==MMX_COOP_ZERO && p->status==MMX_COOP_ALIVE);
+    }
+  } else actors[0]=MmxAudioActor(g_ram+0xba8,MmxZeroGetState(),MmxZeroActive());
+  bool stage=g_ram[0xd1]==2 && g_ram[0xd2]==4 && g_ram[0xd3]<10 && !g_ram[0x1f0c];
+  /* Normal host presentation only. Online rollback audio needs a confirmed
+   * event ledger; leave its existing native audio unchanged for now. */
+  MmxFeedbackAudioFrame(actors,stats->frame,g_ram[0x1f7a],
+      stage && g_config.enable_audio && !MmxNetplayActive() && MmxZeroEnabled());
+}
 static void MmxAfterFrame(const SnesDesktopHostFrameStats *stats) {
+  MmxUpdateFeedback(stats);
   /* Netplay resimulates frames and must never pause for disk writes. */
   MmxCoopTraceAfterFrame(!MmxNetplayActive());
   if (s_benchmark_frames && stats->frame == (unsigned)s_benchmark_frames) {
@@ -247,12 +275,12 @@ int MMX_DESKTOP_ENTRY(int argc, char **argv) {
 
   static const SnesDesktopHostGame game = {
 #if MMX_VARIANT_JP
-    .display_name = "Rockman X", .region = "Japan",
+    .display_name = "Cosmic X JP - Jupiter Skyline r2", .region = "Japan",
     .rom_file = "rockmanx.sfc",
     .expected_crc32_hex = "5584641E",
     .expected_sha256_hex = "76f80cdf704a0e1daf1af5bbf564e427b425a5ee42329417de6f29219fe63e5f",
 #else
-    .display_name = "Mega Man X", .region = "USA",
+    .display_name = "Cosmic X - Jupiter Skyline r2", .region = "USA",
     .num_players = 2,
     .rom_file = "mmx.sfc", .game_id = "megaman-x-us",
     .expected_crc32_hex = "DED53C64",

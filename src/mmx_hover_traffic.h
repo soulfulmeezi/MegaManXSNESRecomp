@@ -12,21 +12,16 @@ static const MmxHoverLane mmx_hover_lanes[] = {
   {1873,411,1777,526}, {1893,411,1843,526},
   {1942,411,2001,526}, {1978,411,2192,526}
 };
-/* v25: Keep the exact eight v24 lanes as the two reference corridors.
- * Additional entrance pairs use their same measured near/far geometry in
- * later intro-highway world sections. The native road-material mask in the
- * renderer hides cars behind asphalt edges, supports and foreground tiles.
- * These added world placements need an in-game visual road-map review. */
+/* Perspective vehicles belong only to the two authored ramp corridors.
+ * Do not repeat these paths into flat-road sections by arbitrary offsets. */
 typedef struct MmxHoverSection { int world_shift; unsigned reference; } MmxHoverSection;
-static const MmxHoverSection mmx_hover_sections[] = {
-  {0,0}, {0,1},             /* original central corridors */
-  {-896,0}, {-896,1},       /* stage opening / early back lanes */
-  {896,0}, {896,1},         /* first extended roadway set */
-  {1792,0}, {1792,1},       /* mid-stage repeated road group */
-  {2688,0}, {2688,1},       /* under-bridge middle stretches */
-  {3584,0}, {3584,1},       /* later road sections */
-  {4480,0}, {4480,1}        /* far-late roadway / exit stretch */
-};
+static const MmxHoverSection mmx_hover_sections[] = {{0,0},{0,1}};
+static inline int MmxPerspectiveRoadColor(uint16_t c) {
+ unsigned r=c&31,g=(c>>5)&31,b=(c>>10)&31;
+ /* Green ramp asphalt, distinct from blue-grey horizontal road. */
+ return r>=2 && r<=8 && g>=6 && g<=14 && b>=3 && b<=10 &&
+        g>=r+2 && g>=b+1;
+}
 enum {
   MMX_HOVER_BASE_LANES=8, MMX_HOVER_SECTION_LANES=4,
   MMX_HOVER_LANES=sizeof(mmx_hover_sections)/sizeof(mmx_hover_sections[0])*MMX_HOVER_SECTION_LANES,
@@ -45,7 +40,7 @@ typedef struct MmxHoverCar { int x,y; unsigned depth,model,direction,phase,state
 static inline MmxHoverCar MmxHoverPosition(unsigned lane,unsigned slot,unsigned tick) {
   MmxHoverLane lane_path=MmxHoverLaneAt(lane);
   const MmxHoverLane *p=&lane_path;
-  unsigned t=(tick*2+lane*137+slot*(MMX_HOVER_CYCLE/MMX_HOVER_PER_LANE))%MMX_HOVER_CYCLE;
+  unsigned t=(tick*12+lane*137+slot*(MMX_HOVER_CYCLE/MMX_HOVER_PER_LANE))%MMX_HOVER_CYCLE;
   MmxHoverCar c;
   c.x=p->fx+(p->nx-p->fx)*(int)t/MMX_HOVER_CYCLE;
   c.y=p->fy+(p->ny-p->fy)*(int)t/MMX_HOVER_CYCLE;
