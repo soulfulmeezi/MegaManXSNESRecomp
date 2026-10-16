@@ -19,4 +19,4 @@ Guarantees required by the project, stronger than original random JS:
 - Never measure 'active' as equivalent to 'visible'. Overlay the actual after-clipping screen count.
 - Test fixed-step accumulator under 30/60/120Hz display; do not tie simulation speed to variable render FPS.
 
-In Round 1, debug keys for cruiser and crash can be no-op placeholders only if visibly marked `UNIMPLEMENTED (future round)`, never falsely represented as functional.
+Every round must include checked, non-conflicting debug keys that actually trigger a cruiser, close flyby, and crash on demand. Round-specific implementation may be incomplete, but unimplemented visual behaviors must be explicitly reported as acceptance gaps, never disguised as functioning tests; do not mark the round complete until the three controls have meaningful demonstrable results.
