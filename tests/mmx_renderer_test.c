@@ -1546,6 +1546,7 @@ static void orbital_swap_continuity(void) {
   MmxZeroState saved=MmxZeroGetState(),state={0};
   uint32_t expected=0;
   for(unsigned phase=0;phase<=6;phase++) {
+    ram[0xd3]=phase<3?phase*2:4;
     state.swap_phase=phase; MmxZeroSetState(state);
     capture(); assert(MmxRendererDraw(output,v,false));
     uint32_t pixel=output[40*v.width+v.extra+100];

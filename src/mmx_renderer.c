@@ -1550,7 +1550,7 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
   /* Scene ownership survives actor swaps; the common color pass below
    * applies palette fades to this background as well as native layers. */
   const int orbital_background=stage &&
-      frame.ram[0x1f7a]==0 && frame.ram[0xd3]==4 &&
+      frame.ram[0x1f7a]==0 &&
       word(frame.ram,0x1e8d)<0xa00 && frame.ram[0x1e89]!=0x0c &&
       mmx_traffic_env_enabled("MMX_ORBITAL_BACKGROUND",1);
   armor_finish_enabled=mmx_traffic_env_enabled("MMX_ARMOR_FINISH",1);

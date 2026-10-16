@@ -144,3 +144,19 @@ hub highlights. Five body palettes, both directions and existing lane motion
 remain. Sprite bounds stay 12/15/14 by 8 pixels to preserve road masks.
 The thruster halo is inert for these wheeled vehicles. Renderer tests passed;
 an enlarged sprite preview was inspected. In-game scale/occlusion review remains.
+
+### Orbital battle first pass
+
+Five original 20x9 code-native ship sprites: scout, interceptor, gunship,
+cargo transport, command cruiser. World-camera bands at 1200, 2500 and 3900
+select patrol, gunfire, impacts and damaged transport withdrawal. These are
+repeatable decorative vignettes, not simulated dogfighting AI. Ships cross
+from offscreen on independent clocks, with animated engines and vertical motion.
+A low-contrast cloud field drifts and breathes over 1440 ticks instead of the
+old diagonal hatching. Earth/Jupiter armor maps remain unchanged.
+The orbital BG2 replacement now covers stage arrival states as well as play.
+The existing airship/final-arena and window-mask exclusions remain.
+Renderer/environment tests passed; synthetic backdrop preview inspected.
+Windows performance, stage-start footage and cinematic pacing need runtime
+review. No new 60fps claim. Earlier clips informed foreground readability and
+small background scale; the EXE scene observations informed depth separation.
