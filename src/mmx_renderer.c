@@ -1597,7 +1597,7 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
   /* World-space car anchors are calculated once per output frame, not once
    * per pixel. Keep this first test completely behind an opt-in variable. */
   MmxNearCar road_cars[MMX_NEAR_CAR_MAX];unsigned road_car_count=0;
-  if(near_cars && traffic_debug_scene) {
+  if(near_cars && highway_scene) {
     int camera_x=view_camera(frame.ram,0x1e4d);
     for(unsigned lane=0;lane<MMX_NEAR_CAR_LANES;++lane)
       for(unsigned slot=0;slot<MMX_NEAR_CAR_SLOTS;++slot) {
@@ -1959,7 +1959,10 @@ bool MmxRendererDraw(uint32_t *out, MmxRenderView view, bool hud) {
         /* Use the untouched road pixel for occlusion, not a fire/light color. */
         int native_color=-1;unsigned tile=background(&p,r,layer,x,y+1,true,&native_color);
         uint16_t base=native_color>=0?(uint16_t)native_color:r->palette[tile&255];
-        if(tile && MmxLowerRoadColor(base)) bg_colors[layer]=pixel;
+        /* Reject known horizontal-road tiles even if their palette changes. */
+        if(tile && !MmxNearRoadTile(0,near_road_tile) &&
+            !MmxNearRoadTile(1,near_road_tile) &&
+            MmxPerspectiveRoadColor(base)) bg_colors[layer]=pixel;
       }
       /* v33g: replace only verified grey-road pixels on BG1.
        * Native BG1 priority, windows, sprites and color math remain intact. */

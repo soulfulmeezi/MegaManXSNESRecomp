@@ -7,6 +7,7 @@
 #include "mmx_cosmic_sky.h"
 #include "mmx_traffic_telemetry.h"
 #include "mmx_hover_traffic.h"
+#include "mmx_near_road_cars.h"
 #include "mmx_knc_bugfix.h"
 #include <assert.h>
 #include <math.h>
@@ -1575,4 +1576,14 @@ static void weapons_menu_margins(void) {
   memset(stock, 0, sizeof(stock));
 }
 
-int main(void) { near_road_cases(); geometry(); raster_and_hud(); sprite_coordinates(); expanded_capacity(); background_resources(); dialogue_and_password(); highway_arena_sky(); highway_airship_binding(); distant_doors(); storm_background_prefill(); resource_decode(); spark_effects(); airport_panorama_edge(); wide_water_plane(); buried_submarine(); background_continuations(); launch_background_palettes(); sting_background_palettes(); mammoth_background_palettes(); dialogue_backdrop(); fortress_actor_presentation(); sprite_priority_and_cutscene_binding(); weapons_menu_margins(); zero_blink_submission(); return 0; }
+static void traffic_road_types(void) {
+ assert(MMX_HOVER_LANES==8);
+ assert(MmxPerspectiveRoadColor(4|(10<<5)|(7<<10)));
+ assert(!MmxPerspectiveRoadColor(5|(9<<5)|(12<<10)));
+ for(unsigned lane=0;lane<2;lane++) {
+  MmxNearCar a=MmxNearCarAt(lane,0,0),b=MmxNearCarAt(lane,0,8);
+  assert(a.x<0x500 && b.x>a.x);
+  assert(MmxNearCarRoadPixel(&a,a.x,MmxNearCarLaneTop(lane)+4,0x0898,1)==-1);
+ }
+}
+int main(void) { traffic_road_types(); near_road_cases(); geometry(); raster_and_hud(); sprite_coordinates(); expanded_capacity(); background_resources(); dialogue_and_password(); highway_arena_sky(); highway_airship_binding(); distant_doors(); storm_background_prefill(); resource_decode(); spark_effects(); airport_panorama_edge(); wide_water_plane(); buried_submarine(); background_continuations(); launch_background_palettes(); sting_background_palettes(); mammoth_background_palettes(); dialogue_backdrop(); fortress_actor_presentation(); sprite_priority_and_cutscene_binding(); weapons_menu_margins(); zero_blink_submission(); return 0; }

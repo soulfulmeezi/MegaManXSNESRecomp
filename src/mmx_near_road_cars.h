@@ -5,9 +5,9 @@
 /* Original compact road vehicles: panel shading, framed cabins and animated
  * wheel hubs. Existing lane geometry and native-road occlusion are retained. */
 enum {
- MMX_NEAR_CAR_SLOTS=30, MMX_NEAR_CAR_LANES=2,
+ MMX_NEAR_CAR_SLOTS=42, MMX_NEAR_CAR_LANES=2,
  MMX_NEAR_CAR_MAX=MMX_NEAR_CAR_SLOTS*MMX_NEAR_CAR_LANES,
- MMX_NEAR_CAR_START=0x0500, MMX_NEAR_CAR_SPAN=0x1100,
+ MMX_NEAR_CAR_START=0, MMX_NEAR_CAR_SPAN=0x1800,
  MMX_NEAR_CAR_SEDAN_W=12, MMX_NEAR_CAR_TRUCK_W=15,
  MMX_NEAR_CAR_SPORTS_W=14, MMX_NEAR_CAR_W_MAX=15,
  MMX_NEAR_CAR_H=8, MMX_NEAR_CAR_MODELS=3,
@@ -42,7 +42,7 @@ static inline int MmxNearCarWidth(unsigned model) {
  return model<MMX_NEAR_CAR_MODELS?(int)w[model]:0;
 }
 static inline int MmxNearCarLaneTop(unsigned lane) {return lane?472:464;}
-/* Deterministic lane-relative world motion: upper A => +X; lower B => -X.
+/* Deterministic lane-relative world motion: both flat-road lanes => +X.
  * A speeds 2 or 1.333 px/frame; B speeds 1.333 or 1 px/frame.
  * Anchor and mask always use full world coordinates independent of camera. */
 static inline MmxNearCar MmxNearCarAt(unsigned lane,unsigned slot,unsigned tick) {
@@ -54,7 +54,7 @@ static inline MmxNearCar MmxNearCarAt(unsigned lane,unsigned slot,unsigned tick)
  unsigned seed=(slot%MMX_NEAR_CAR_SLOTS)*MMX_NEAR_CAR_SPAN/MMX_NEAR_CAR_SLOTS;
  unsigned divisor=(c.lane?3u:2u)+((slot+c.lane)&1u);
  unsigned progress=(seed+64+(tick*4)/divisor)%MMX_NEAR_CAR_SPAN;
- c.x=MMX_NEAR_CAR_START+(int)(c.lane?MMX_NEAR_CAR_SPAN-1u-progress:progress);
+ c.x=MMX_NEAR_CAR_START+(int)progress;
  return c;
 }
 /* Returns 0 transparent or 1..12 indexed color.
@@ -65,7 +65,7 @@ static inline unsigned MmxNearCarIndex(const MmxNearCar *c,int wx,int wy) {
  int width=MmxNearCarWidth(c->model);
  int ix=wx-(c->x-width/2),iy=wy-MmxNearCarLaneTop(c->lane);
  if(ix<0 || ix>=width || iy<0 || iy>=MMX_NEAR_CAR_H)return 0;
- if(c->lane==1)ix=width-1-ix;
+ /* Both horizontal road lanes face right. */
  char symbol=mmx_road_detail[c->model][iy][ix];
  unsigned v=symbol>='A'?(unsigned)(symbol-'A'+10):(unsigned)(symbol-'0');
  /* Subtle two-frame wheel rotation; no flickering body or glow strip. */

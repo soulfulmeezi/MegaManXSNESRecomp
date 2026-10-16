@@ -185,3 +185,19 @@ this does not assert every ramp or curved road is mapped correctly.
 Renderer/environment tests and sprite uniqueness/dimension checks passed.
 Twenty-ship contact sheet inspected. Full Windows performance and road contact
 remain unverified. This is an experimental pass, not the approved 8/10 baseline.
+
+### Correct road-type routing after marked screenshot review
+
+Removed arbitrary repeated perspective paths: retain only the two original
+ramp corridors (eight lanes). Perspective rendering now requires dark green
+ramp material and rejects the known flat-road tile IDs. This fixes the prior
+blue-grey road mask selecting horizontal road instead of green ramps.
+
+Compact side-view cars now span world X 0..0x17ff, including stage opening,
+with both lanes traveling left to right. Their exact native flat-road tile
+masks and world Y anchors remain; pillars and non-road tiles stay excluded.
+The former debug-camera interval no longer suppresses actual flat-road cars.
+Renderer tests cover road color separation, eight-ramp scope, opening traffic,
+rightward motion in both lanes, and pillar rejection. Existing renderer suite
+passes. Curved red-line alignment and any other road tile families still need
+native captures/gameplay verification; screenshots do not prove world geometry.
