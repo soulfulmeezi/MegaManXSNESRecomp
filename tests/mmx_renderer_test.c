@@ -1474,6 +1474,7 @@ static void cosmic_combat(void) {
   assert(MmxCosmicShotPixel(MMX_JUPITER_STORM,1,0,20)<0);
   MmxWeaponsCancelShots(ram);MmxWeaponsSetCombatState((MmxWeaponCombatState){0});
 }
+static void orbital_swap_continuity(void);
 static void zero_blink_submission(void) {
   /* A submitted body belongs to the OAM epoch even if the next player update
    * has already cleared its visibility flag. It must never turn back into X. */
@@ -1528,8 +1529,30 @@ static void zero_blink_submission(void) {
   assert(MmxRendererDraw(output,view,false) && output[40 * 256 + 40] == 0);
   earth_x_surface_coordinates();
   cosmic_combat();
+  orbital_swap_continuity();
   MmxZeroDisable(); g_mmx_custom_renderer = false; g_mmx_render_asset_repairs = true;
   MmxRendererReset();
+}
+static void orbital_swap_continuity(void) {
+  assert(MmxZeroEnabled()); /* Synthetic assets loaded by zero_blink_submission. */
+  memset(&ppu,0,sizeof(ppu)); memset(ram,0,sizeof(ram));
+  MmxRendererReset(); MmxRendererSetRom(NULL,0);
+  ram[0xd1]=2; ram[0xd2]=ram[0xd3]=4;
+  ppu.inidisp=15; ppu.bgmode=1; ppu.screenEnabled[0]=2;
+  ppu.bgXsc[1]=8; ppu.cgram[1]=31;
+  for(int i=0;i<1024;i++)ppu.vram[0x800+i]=1;
+  for(int y=0;y<8;y++)ppu.vram[16+y]=255;
+  MmxRenderView v=MmxRendererViewport(MMX_ASPECT_ADAPTIVE,0,0,kSnesDisplayAspect_Crt4x3);
+  MmxZeroState saved=MmxZeroGetState(),state={0};
+  uint32_t expected=0;
+  for(unsigned phase=0;phase<=6;phase++) {
+    state.swap_phase=phase; MmxZeroSetState(state);
+    capture(); assert(MmxRendererDraw(output,v,false));
+    uint32_t pixel=output[40*v.width+v.extra+100];
+    if(!phase){expected=pixel;assert(expected!=0xff0000);}
+    else assert(pixel==expected);
+  }
+  MmxZeroSetState(saved);
 }
 static void weapons_menu_margins(void) {
   memset(&ppu, 0, sizeof(ppu)); memset(ram, 0, sizeof(ram));
