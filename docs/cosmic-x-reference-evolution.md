@@ -135,3 +135,12 @@ Removed the diagonal purple nebula hatching after gameplay review. The orbital
 background now stays present through all six character-swap phases; palette
 fades use the common compositor instead of revealing the original background.
 Renderer regression tests cover swap continuity with synthetic Zero assets.
+
+### Detailed lower-road vehicles
+
+Replaced the luminous strip sprites with original compact sedan, cargo truck,
+and sports car pixels: framed cabins, shaded panels, steel bumpers and rotating
+hub highlights. Five body palettes, both directions and existing lane motion
+remain. Sprite bounds stay 12/15/14 by 8 pixels to preserve road masks.
+The thruster halo is inert for these wheeled vehicles. Renderer tests passed;
+an enlarged sprite preview was inspected. In-game scale/occlusion review remains.
