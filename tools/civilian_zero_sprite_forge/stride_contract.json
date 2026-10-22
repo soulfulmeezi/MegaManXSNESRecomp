@@ -1,0 +1,60 @@
+{
+  "schema": "cosmicx-zero-hd-run-contract.v1",
+  "upstream": "0x0funky/agent-sprite-forge",
+  "upstream_sha": "5324342fdfab72430f4e9604f3fe427009f8596d",
+  "canvas": [
+    288,
+    288
+  ],
+  "hz": 60,
+  "gait_pose_count": 8,
+  "poses": [
+    {
+      "index": 0,
+      "lead": "near",
+      "phase": "contact"
+    },
+    {
+      "index": 1,
+      "lead": "near",
+      "phase": "down"
+    },
+    {
+      "index": 2,
+      "lead": "near",
+      "phase": "passing"
+    },
+    {
+      "index": 3,
+      "lead": "near",
+      "phase": "up"
+    },
+    {
+      "index": 4,
+      "lead": "far",
+      "phase": "contact"
+    },
+    {
+      "index": 5,
+      "lead": "far",
+      "phase": "down"
+    },
+    {
+      "index": 6,
+      "lead": "far",
+      "phase": "passing"
+    },
+    {
+      "index": 7,
+      "lead": "far",
+      "phase": "up"
+    }
+  ],
+  "review": [
+    "Opposite trailing legs visibly extend in contact poses 0 and 4",
+    "Saber-side arm guarded near hip; free arm clearly swings",
+    "Ground contact and root match reference",
+    "Identity, palette, hair, jacket and 3x HD detail unchanged",
+    "Actual in-game test recorded; no claim of fix from static sheet"
+  ]
+}
