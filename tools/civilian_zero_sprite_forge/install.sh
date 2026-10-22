@@ -22,6 +22,10 @@ printf 'git switch %s\n' "$BACKUP" > "$OUT/rollback_command.txt"
 PY=python
 if command -v python3 >/dev/null; then PY=python3; fi
 "$PY" -c 'import sys; assert sys.version_info >= (3,10)'
+# When launched from MSYS2, prefer the Windows Codex home over the MSYS2 home.
+if [[ -z "${CODEX_HOME:-}" && -n "${USERPROFILE:-}" ]] && command -v cygpath >/dev/null 2>&1; then
+  export CODEX_HOME="$(cygpath -m "$USERPROFILE")/.codex"
+fi
 if [ ! -e "$CACHE/.git" ]; then
   mkdir -p "$(dirname "$CACHE")"
   git clone --filter=blob:none --no-checkout https://github.com/0x0funky/agent-sprite-forge.git "$CACHE"
